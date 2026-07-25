@@ -5,6 +5,7 @@ import math
 import threading
 from dataclasses import dataclass
 
+import av
 import torch
 from diffusers import AutoPipelineForImage2Image
 from PIL import Image, ImageChops, ImageOps, ImageStat, UnidentifiedImageError
@@ -67,6 +68,25 @@ def prepare_image(data: bytes, size: int) -> Image.Image:
             return ImageOps.fit(image, (size, size), Image.Resampling.LANCZOS)
     except (UnidentifiedImageError, OSError, ValueError) as exc:
         raise InvalidImageError("The file is not a readable image.") from exc
+
+
+def encode_mp4(frames: list[bytes], fps: int) -> bytes:
+    output = io.BytesIO()
+    with av.open(output, mode="w", format="mp4") as container:
+        stream = container.add_stream("libx264", rate=fps)
+        stream.width = 512
+        stream.height = 512
+        stream.pix_fmt = "yuv420p"
+        stream.options = {"crf": "20", "preset": "medium"}
+
+        for jpeg in frames:
+            with Image.open(io.BytesIO(jpeg)) as image:
+                frame = av.VideoFrame.from_image(image.convert("RGB"))
+            for packet in stream.encode(frame):
+                container.mux(packet)
+        for packet in stream.encode():
+            container.mux(packet)
+    return output.getvalue()
 
 
 class LatentWalk:

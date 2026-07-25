@@ -24,12 +24,14 @@ from .model import (
     InvalidImageError,
     LatentWalk,
     WalkSettings,
+    encode_mp4,
     model_service,
     prepare_image,
 )
 
 STATIC_DIR = Path(__file__).parent / "static"
 LEASE_IDLE_SECONDS = 120
+MAX_SEQUENCE_FRAMES = 1200
 MAX_LOGIN_FAILURES = 8
 LOGIN_WINDOW_SECONDS = 5 * 60
 
@@ -216,6 +218,7 @@ async def walk_socket(websocket: WebSocket) -> None:
 
         walk = LatentWalk(pixels)
         initial = await asyncio.to_thread(model_service.decode_jpeg, walk.image)
+        frames: deque[bytes] = deque([initial], maxlen=MAX_SEQUENCE_FRAMES)
         await websocket.send_json(
             {"type": "ready", "step": 0, "distance": 0.0, "size": size}
         )
@@ -230,7 +233,31 @@ async def walk_socket(websocket: WebSocket) -> None:
             except json.JSONDecodeError:
                 await send_error(websocket, "Invalid control message.")
                 continue
-            if not isinstance(message, dict) or message.get("type") != "step":
+            if not isinstance(message, dict):
+                await send_error(websocket, "Unknown control message.")
+                continue
+            if message.get("type") == "export":
+                fps = message.get("fps", 4)
+                if not isinstance(fps, int) or isinstance(fps, bool):
+                    await send_error(websocket, "Video FPS must be an integer.")
+                    continue
+                fps = min(max(fps, 1), 12)
+                await websocket.send_json(
+                    {"type": "status", "message": f"Encoding {len(frames)} frames at {fps} fps…"}
+                )
+                video = await asyncio.to_thread(encode_mp4, list(frames), fps)
+                await websocket.send_json(
+                    {
+                        "type": "video",
+                        "filename": f"latent-walk-{fps}fps.mp4",
+                        "contentType": "video/mp4",
+                        "frames": len(frames),
+                        "fps": fps,
+                    }
+                )
+                await websocket.send_bytes(video)
+                continue
+            if message.get("type") != "step":
                 await send_error(websocket, "Unknown control message.")
                 continue
 
@@ -251,6 +278,7 @@ async def walk_socket(websocket: WebSocket) -> None:
                 model_service.denoise_step, walk, settings
             )
             frame = await asyncio.to_thread(model_service.decode_jpeg, walk.image)
+            frames.append(frame)
             await websocket.send_json(
                 {
                     "type": "frame",

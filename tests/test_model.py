@@ -1,9 +1,16 @@
 import io
 
+import av
 import pytest
 from PIL import Image
 
-from latent_walk.model import InvalidImageError, LatentWalk, WalkSettings, prepare_image
+from latent_walk.model import (
+    InvalidImageError,
+    LatentWalk,
+    WalkSettings,
+    encode_mp4,
+    prepare_image,
+)
 
 
 def image_bytes(width: int = 80, height: int = 40) -> bytes:
@@ -40,3 +47,21 @@ def test_settings_are_bounded() -> None:
         {"noiseStrength": 9, "denoiseSteps": 100}
     )
     assert settings == WalkSettings(noise_strength=0.8, denoise_steps=4)
+
+
+def test_mp4_uses_requested_frame_rate() -> None:
+    frames = []
+    for color in ("red", "green", "blue"):
+        output = io.BytesIO()
+        Image.new("RGB", (512, 512), color).save(output, "JPEG")
+        frames.append(output.getvalue())
+
+    video = encode_mp4(frames, fps=2)
+
+    with av.open(io.BytesIO(video)) as container:
+        stream = container.streams.video[0]
+        decoded = list(container.decode(stream))
+        duration = float(stream.duration * stream.time_base)
+    assert len(decoded) == 3
+    assert float(stream.average_rate) == 2
+    assert duration == pytest.approx(1.5, abs=0.05)

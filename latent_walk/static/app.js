@@ -14,7 +14,6 @@ const elements = {
   loading: $("#loading"),
   loadingText: $("#loadingText"),
   loadingHint: $("#loadingHint"),
-  recordingCanvas: $("#recordingCanvas"),
   hud: $("#stageHud"),
   stepCount: $("#stepCount"),
   drift: $("#driftValue"),
@@ -39,12 +38,8 @@ let reconnectToken = 0;
 let requestStartedAt = 0;
 let busyBlocked = false;
 let busyRetryTimer = null;
-let recorder = null;
-let videoChunks = [];
-let recordingMime = "";
-let recordedFrames = 0;
+let exportingVideo = false;
 const historyUrls = [];
-const recordingContext = elements.recordingCanvas.getContext("2d", { alpha: false });
 
 const controls = [
   [elements.noiseStrength, $("#noiseStrengthOutput"), (value) => Number(value).toFixed(2)],
@@ -67,82 +62,30 @@ function setLoading(visible, text = "Encoding starting point…", hint = "The fi
   elements.loadingHint.textContent = hint;
 }
 
-function supportedVideoType() {
-  if (!window.MediaRecorder || !elements.recordingCanvas.captureStream) return "";
-  const candidates = [
-    "video/mp4;codecs=avc1.42E01E",
-    "video/webm;codecs=vp9",
-    "video/webm;codecs=vp8",
-    "video/webm",
-  ];
-  return candidates.find((type) => MediaRecorder.isTypeSupported(type)) || "";
-}
-
-async function drawRecordingFrame(blob) {
-  const bitmap = await createImageBitmap(blob);
-  recordingContext.drawImage(bitmap, 0, 0, 512, 512);
-  bitmap.close();
-  recordedFrames += 1;
-  elements.video.disabled = !recordingMime || recordedFrames < 2;
-}
-
-function startRecording() {
-  if (!recordingMime) return;
-  if (recorder?.state === "paused") {
-    recorder.resume();
-    return;
-  }
-  if (recorder?.state === "recording") return;
-
-  videoChunks = [];
-  const instance = new MediaRecorder(
-    elements.recordingCanvas.captureStream(Number(elements.fps.value)),
-    { mimeType: recordingMime, videoBitsPerSecond: 5_000_000 },
-  );
-  recorder = instance;
-  instance.addEventListener("dataavailable", (event) => {
-    if (recorder === instance && event.data.size) videoChunks.push(event.data);
-  });
-  instance.start(1000);
-}
-
-function pauseRecording() {
-  if (recorder?.state === "recording") recorder.pause();
-}
-
 function discardRecording() {
-  const instance = recorder;
-  recorder = null;
-  if (instance && instance.state !== "inactive") instance.stop();
-  videoChunks = [];
-  recordedFrames = 0;
+  exportingVideo = false;
   elements.video.disabled = true;
 }
 
 function downloadRecording() {
-  if (!recorder || recordedFrames < 2) return;
-  const instance = recorder;
-  const wasWalking = walking;
-  instance.addEventListener("stop", () => {
-    if (!videoChunks.length) return;
-    const blob = new Blob(videoChunks, { type: recordingMime });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = `latent-walk-${Date.now()}.${recordingMime.startsWith("video/mp4") ? "mp4" : "webm"}`;
-    link.click();
-    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
-    recorder = null;
-    videoChunks = [];
-    recordedFrames = 0;
-    elements.video.disabled = true;
-    if (wasWalking) startRecording();
-  }, { once: true });
-  if (instance.state !== "inactive") instance.stop();
+  if (
+    exportingVideo
+    || Number(elements.stepCount.textContent) < 1
+    || socket?.readyState !== WebSocket.OPEN
+  ) return;
+  if (walking) stopWalking();
+
+  exportingVideo = true;
+  elements.video.disabled = true;
+  setStatus("Encoding fixed-rate MP4", "busy");
+  socket.send(JSON.stringify({
+    type: "export",
+    fps: Number(elements.fps.value),
+  }));
 }
 
 async function replaceImage(blob, meta, addToHistory = true) {
-  await drawRecordingFrame(blob);
+  elements.video.disabled = Number(meta.step ?? 0) < 1;
   const url = URL.createObjectURL(blob);
   if (currentUrl) URL.revokeObjectURL(currentUrl);
   currentUrl = url;
@@ -181,7 +124,6 @@ function stopWalking() {
   elements.walk.classList.remove("active");
   elements.dropzone.classList.remove("walking");
   elements.walkLabel.textContent = "Continue walk";
-  pauseRecording();
   setStatus(socket?.readyState === WebSocket.OPEN ? "Paused" : "Disconnected", "ready");
 }
 
@@ -202,7 +144,6 @@ function toggleWalk() {
     return;
   }
   walking = true;
-  startRecording();
   elements.walk.classList.add("active");
   elements.dropzone.classList.add("walking");
   elements.walkLabel.textContent = "Pause walk";
@@ -288,6 +229,20 @@ async function connectAndEncode() {
     }
 
     const meta = nextFrameMeta || { step: 0, distance: 0 };
+    if (meta.type === "video") {
+      const url = URL.createObjectURL(event.data);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = meta.filename;
+      link.click();
+      window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+      nextFrameMeta = null;
+      exportingVideo = false;
+      elements.video.disabled = false;
+      setLoading(false);
+      setStatus(`Exported ${meta.frames} frames at ${meta.fps} fps`, "ready");
+      return;
+    }
     await replaceImage(event.data, meta);
     nextFrameMeta = null;
     setLoading(false);
@@ -372,8 +327,6 @@ for (const eventName of ["dragleave", "drop"]) {
   });
 }
 elements.dropzone.addEventListener("drop", (event) => selectFile(event.dataTransfer.files[0]));
-recordingMime = supportedVideoType();
-if (!recordingMime) elements.video.title = "Video recording is not supported by this browser";
 window.addEventListener("beforeunload", () => {
   discardRecording();
   disconnect();

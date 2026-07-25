@@ -65,9 +65,10 @@ persistent systemd user service.
 - **Playback** controls how quickly the browser requests frames. Actual speed is
   limited by denoising time.
 - **Resolution** trades CPU speed for output detail.
-- **Download video** records the displayed sequence in the browser and exports
-  MP4 when supported or WebM as a fallback. Frames are not retained by the
-  server.
+- **Download video** encodes the current sequence as H.264 MP4. Each generated
+  image receives exactly one frame interval at the selected playback FPS,
+  regardless of generation or network speed. Up to 1,200 compressed frames are
+  held in memory for the active session and discarded when it disconnects.
 
 The uploaded image is sent only to the server running on this machine.
 
