@@ -59,9 +59,6 @@ h1 em { color: var(--violet); font-style: normal; }
   display: flex; justify-content: center; max-height: 760px; overflow: hidden; position: relative;
 }
 .stage.dragging { border-color: var(--acid); background: rgb(216 255 87 / 4%); }
-.stage::before, .stage::after { border-color: #4b4d54; border-style: solid; content: ""; height: 22px; position: absolute; width: 22px; z-index: 3; }
-.stage::before { border-width: 1px 0 0 1px; left: 16px; top: 16px; }
-.stage::after { border-width: 0 1px 1px 0; bottom: 16px; right: 16px; }
 .empty-state { text-align: center; z-index: 2; }
 .upload-glyph { align-items: center; border: 1px solid #383a40; border-radius: 50%; display: flex; height: 84px; justify-content: center; margin: 0 auto 24px; width: 84px; }
 .upload-glyph svg { fill: none; height: 34px; stroke: var(--acid); stroke-linecap: square; stroke-width: 1.5; width: 34px; }
@@ -69,9 +66,6 @@ h1 em { color: var(--violet); font-style: normal; }
 .empty-state p { color: var(--muted); font: 10px DM Mono, monospace; margin: 0 0 26px; text-transform: uppercase; }
 .text-button { background: none; border: 0; border-bottom: 1px solid var(--ink); cursor: pointer; font-size: 12px; padding: 0 0 5px; }
 #outputImage { height: 100%; object-fit: cover; width: 100%; }
-.scanline { background: linear-gradient(transparent, rgb(216 255 87 / 8%), transparent); height: 12%; left: 0; opacity: 0; pointer-events: none; position: absolute; top: -12%; width: 100%; }
-.stage.walking .scanline { animation: scan 3s linear infinite; opacity: 1; }
-@keyframes scan { to { transform: translateY(930%); } }
 .stage-hud { bottom: 18px; display: flex; gap: 8px; left: 18px; position: absolute; z-index: 4; }
 .stage-hud span { backdrop-filter: blur(12px); background: rgb(8 9 12 / 70%); border: 1px solid rgb(255 255 255 / 14%); font: 9px DM Mono, monospace; letter-spacing: .08em; padding: 7px 9px; }
 .stage-hud b { color: var(--acid); font-weight: 400; }
