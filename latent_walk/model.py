@@ -2,13 +2,25 @@ from __future__ import annotations
 
 import io
 import math
+import secrets
 import threading
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import av
+import numpy as np
 import torch
+import torch.nn.functional as F
 from diffusers import AutoPipelineForImage2Image
 from PIL import Image, ImageChops, ImageOps, ImageStat, UnidentifiedImageError
+from transformers import CLIPVisionModelWithProjection
+
+from latent_walk.experiments import (
+    ExperimentSettings,
+    FrequencyNoiseStrategy,
+    StepResult,
+    WalkState,
+    gaussian_blur,
+)
 
 MODEL_ID = "stabilityai/sdxl-turbo"
 MAX_UPLOAD_BYTES = 12 * 1024 * 1024
@@ -23,6 +35,7 @@ class InvalidImageError(ValueError):
 class WalkSettings:
     noise_strength: float = 0.45
     denoise_steps: int = 2
+    experiments: ExperimentSettings = field(default_factory=ExperimentSettings)
 
     @classmethod
     def from_message(cls, message: dict[str, object]) -> "WalkSettings":
@@ -31,6 +44,7 @@ class WalkSettings:
                 message, "noiseStrength", 0.45, 0.15, 0.8
             ),
             denoise_steps=_bounded_int(message, "denoiseSteps", 2, 1, 4),
+            experiments=ExperimentSettings.from_message(message),
         )
 
 
@@ -89,22 +103,88 @@ def encode_mp4(frames: list[bytes], fps: int) -> bytes:
     return output.getvalue()
 
 
-class LatentWalk:
+class LatentWalk(WalkState):
     def __init__(self, image: Image.Image) -> None:
-        self.image = image.copy()
-        self.step_number = 0
+        super().__init__(image=image, seed=secrets.randbits(63))
 
     def advance(self, image: Image.Image) -> float:
         difference = ImageChops.difference(self.image, image)
         change = sum(ImageStat.Stat(difference).rms) / (3 * 255)
-        self.image = image
-        self.step_number += 1
+        super().advance(image)
         return change
+
+
+class ClipGuidance:
+    def __init__(
+        self,
+        settings: ExperimentSettings,
+        vae: torch.nn.Module,
+        image_encoder: CLIPVisionModelWithProjection,
+        target: torch.Tensor,
+    ) -> None:
+        self.settings = settings
+        self.vae = vae
+        self.image_encoder = image_encoder
+        self.target = target
+
+    def __call__(
+        self,
+        pipeline: object,
+        step_index: int,
+        timestep: torch.Tensor,
+        callback_kwargs: dict[str, torch.Tensor],
+    ) -> dict[str, torch.Tensor]:
+        del timestep
+        latents = callback_kwargs["latents"]
+        guidance = self.settings.clip.guidance
+        if guidance <= 0 or step_index >= int(pipeline.num_timesteps) - 1:
+            return callback_kwargs
+
+        self.vae.to(dtype=torch.float32)
+        try:
+            with torch.enable_grad():
+                active = latents.detach().float().requires_grad_(True)
+                pixels = self.vae.decode(
+                    active / self.vae.config.scaling_factor,
+                    return_dict=False,
+                )[0]
+                embedding = self._embed_pixels(pixels)
+                loss = 1 - (embedding * self.target).sum(dim=-1).mean()
+                gradient = torch.autograd.grad(loss, active)[0]
+        finally:
+            self.vae.to(dtype=torch.float16)
+
+        gradient = gaussian_blur(gradient, sigma=1.5)
+        gradient /= gradient.square().mean().sqrt().clamp_min(1e-6)
+        remaining_steps = max(int(pipeline.num_timesteps) - step_index, 1)
+        step_size = guidance / math.sqrt(remaining_steps)
+        callback_kwargs["latents"] = (
+            latents - step_size * gradient.to(latents.dtype)
+        ).detach()
+        return callback_kwargs
+
+    def _embed_pixels(self, pixels: torch.Tensor) -> torch.Tensor:
+        pixels = (pixels * 0.5 + 0.5).clamp(0, 1)
+        pixels = F.interpolate(
+            pixels,
+            size=(224, 224),
+            mode="bicubic",
+            align_corners=False,
+            antialias=True,
+        )
+        mean = pixels.new_tensor([0.48145466, 0.4578275, 0.40821073])
+        std = pixels.new_tensor([0.26862954, 0.26130258, 0.27577711])
+        pixels = (pixels - mean.view(1, 3, 1, 1)) / std.view(1, 3, 1, 1)
+        output = self.image_encoder(pixel_values=pixels.to(torch.float16))
+        return F.normalize(output.image_embeds.float(), dim=-1)
 
 
 class ModelService:
     def __init__(self) -> None:
         self._pipeline: AutoPipelineForImage2Image | None = None
+        self._clip_encoder: CLIPVisionModelWithProjection | None = None
+        self._ip_adapter_loaded = False
+        self._frequency_noise = FrequencyNoiseStrategy()
         self._load_lock = threading.Lock()
         self._inference_lock = threading.Lock()
 
@@ -115,6 +195,15 @@ class ModelService:
     @property
     def denoiser_loaded(self) -> bool:
         return self.loaded
+
+    def loading_message(self, settings: WalkSettings) -> str | None:
+        if not self.loaded:
+            return "Loading SDXL-Turbo on the RTX 4090…"
+        if settings.experiments.clip.enabled and self._clip_encoder is None:
+            return "Loading the CLIP semantic encoder…"
+        if settings.experiments.ip_adapter.enabled and not self._ip_adapter_loaded:
+            return "Loading the IP-Adapter image encoder…"
+        return None
 
     def load(self) -> AutoPipelineForImage2Image:
         if self._pipeline is None:
@@ -132,25 +221,269 @@ class ModelService:
                     pipeline.set_progress_bar_config(disable=True)
                     pipeline.to("cuda")
                     pipeline.vae.to(dtype=torch.float32)
+                    pipeline.vae.requires_grad_(False)
+                    pipeline.unet.requires_grad_(False)
+                    pipeline.text_encoder.requires_grad_(False)
+                    pipeline.text_encoder_2.requires_grad_(False)
                     self._pipeline = pipeline
         return self._pipeline
 
-    def denoise_step(self, walk: LatentWalk, settings: WalkSettings) -> float:
-        with self._inference_lock, torch.inference_mode():
+    def denoise_step(
+        self,
+        walk: LatentWalk,
+        settings: WalkSettings,
+    ) -> StepResult:
+        with self._inference_lock:
             pipeline = self.load()
             total_steps = max(
                 settings.denoise_steps,
                 math.ceil(settings.denoise_steps / settings.noise_strength),
             )
-            result = pipeline(
-                prompt="",
-                image=walk.image,
-                strength=settings.noise_strength,
-                num_inference_steps=total_steps,
-                guidance_scale=0.0,
-                output_type="pil",
-            ).images[0]
-            return walk.advance(result)
+            if walk.generator is None:
+                walk.generator = torch.Generator(device="cuda").manual_seed(walk.seed)
+                walk.semantic_generator = torch.Generator(
+                    device="cuda"
+                ).manual_seed(walk.seed ^ 0x434C4950)
+                walk.conditioning_generator = torch.Generator(
+                    device="cuda"
+                ).manual_seed(walk.seed ^ 0x49504144)
+
+            ip_kwargs = self._prepare_ip_adapter(walk, settings.experiments)
+            callback, clip_target = self._prepare_clip_guidance(
+                walk,
+                settings.experiments,
+            )
+            custom_latents = self._prepare_custom_latents(
+                walk,
+                settings,
+                total_steps,
+            )
+            with torch.no_grad():
+                result = pipeline(
+                    prompt="",
+                    image=walk.image,
+                    strength=settings.noise_strength,
+                    num_inference_steps=total_steps,
+                    guidance_scale=0.0,
+                    generator=walk.generator,
+                    latents=custom_latents,
+                    callback_on_step_end=callback,
+                    callback_on_step_end_tensor_inputs=["latents"],
+                    output_type="pil",
+                    **ip_kwargs,
+                ).images[0]
+
+            change = walk.advance(result)
+            semantic_change = self._update_clip_state(walk, settings.experiments)
+            if clip_target is not None and walk.semantic_embedding is not None:
+                target_similarity = float(
+                    (walk.semantic_embedding * clip_target).sum()
+                )
+            else:
+                target_similarity = None
+            return StepResult(
+                image=result,
+                pixel_change=change,
+                semantic_change=semantic_change,
+                effective_parameters={
+                    "frequency": settings.experiments.frequency.enabled,
+                    "clip": settings.experiments.clip.enabled,
+                    "ipAdapter": settings.experiments.ip_adapter.enabled,
+                    "clipTargetSimilarity": target_similarity,
+                },
+            )
+
+    def _prepare_custom_latents(
+        self,
+        walk: LatentWalk,
+        settings: WalkSettings,
+        total_steps: int,
+    ) -> torch.Tensor | None:
+        if not settings.experiments.frequency.enabled:
+            return None
+
+        pipeline = self._pipeline
+        device = pipeline._execution_device
+        image = pipeline.image_processor.preprocess(walk.image).to(
+            device=device,
+            dtype=torch.float32,
+        )
+        pipeline.vae.to(dtype=torch.float32)
+        try:
+            with torch.no_grad():
+                encoded = pipeline.vae.encode(image).latent_dist.sample(
+                    generator=walk.generator
+                )
+        finally:
+            pipeline.vae.to(dtype=torch.float16)
+        encoded = (
+            encoded * pipeline.vae.config.scaling_factor
+        ).to(dtype=torch.float16)
+
+        pipeline.scheduler.set_timesteps(total_steps, device=device)
+        init_timestep = min(
+            int(total_steps * settings.noise_strength),
+            total_steps,
+        )
+        timestep = pipeline.scheduler.timesteps[-init_timestep]
+        latent_timestep = timestep.repeat(encoded.shape[0])
+        noise = self._frequency_noise.sample(
+            encoded,
+            walk,
+            settings.experiments.frequency,
+            walk.generator,
+        )
+        return pipeline.scheduler.add_noise(encoded, noise, latent_timestep)
+
+    def _prepare_ip_adapter(
+        self,
+        walk: LatentWalk,
+        settings: ExperimentSettings,
+    ) -> dict[str, object]:
+        adapter = settings.ip_adapter
+        pipeline = self._pipeline
+        if not adapter.enabled:
+            if self._ip_adapter_loaded:
+                pipeline.unload_ip_adapter()
+                self._ip_adapter_loaded = False
+            return {}
+
+        if not self._ip_adapter_loaded:
+            pipeline.load_ip_adapter(
+                "h94/IP-Adapter",
+                subfolder="sdxl_models",
+                weight_name="ip-adapter-plus_sdxl_vit-h.safetensors",
+                image_encoder_folder="models/image_encoder",
+            )
+            pipeline.image_encoder.to(device="cuda", dtype=torch.float16)
+            pipeline.image_encoder.requires_grad_(False)
+            self._ip_adapter_loaded = True
+
+        pipeline.set_ip_adapter_scale(adapter.weight)
+        if adapter.memory == "ema":
+            embeds = pipeline.prepare_ip_adapter_image_embeds(
+                ip_adapter_image=walk.image,
+                ip_adapter_image_embeds=None,
+                device=pipeline._execution_device,
+                num_images_per_prompt=1,
+                do_classifier_free_guidance=False,
+            )[0]
+            if walk.ip_adapter_ema is None:
+                walk.ip_adapter_ema = embeds
+            else:
+                walk.ip_adapter_ema = (
+                    adapter.decay * walk.ip_adapter_ema
+                    + (1 - adapter.decay) * embeds
+                )
+            return {"ip_adapter_image_embeds": [walk.ip_adapter_ema]}
+
+        history = list(walk.history)
+        source = walk.image
+        if history and adapter.memory == "lagged":
+            source = history[max(0, len(history) - adapter.lag - 1)]
+        elif history and adapter.memory == "random":
+            index = torch.randint(
+                len(history),
+                (1,),
+                generator=walk.conditioning_generator,
+                device="cuda",
+            ).item()
+            source = history[index]
+        return {"ip_adapter_image": source}
+
+    def _load_clip_encoder(self) -> CLIPVisionModelWithProjection:
+        if self._clip_encoder is None:
+            encoder = CLIPVisionModelWithProjection.from_pretrained(
+                "openai/clip-vit-large-patch14",
+                torch_dtype=torch.float16,
+                use_safetensors=True,
+            ).to("cuda")
+            encoder.eval().requires_grad_(False)
+            self._clip_encoder = encoder
+        return self._clip_encoder
+
+    def _embed_image(self, image: Image.Image) -> torch.Tensor:
+        encoder = self._load_clip_encoder()
+        pixels = torch.from_numpy(
+            np.asarray(image.convert("RGB"), dtype=np.float32).copy()
+        ).permute(2, 0, 1).unsqueeze(0).to("cuda") / 255
+        pixels = F.interpolate(
+            pixels,
+            size=(224, 224),
+            mode="bicubic",
+            align_corners=False,
+            antialias=True,
+        ).clamp(0, 1)
+        mean = pixels.new_tensor([0.48145466, 0.4578275, 0.40821073])
+        std = pixels.new_tensor([0.26862954, 0.26130258, 0.27577711])
+        pixels = (pixels - mean.view(1, 3, 1, 1)) / std.view(1, 3, 1, 1)
+        with torch.no_grad():
+            output = encoder(pixel_values=pixels.to(torch.float16))
+        return F.normalize(output.image_embeds.float(), dim=-1)
+
+    def _prepare_clip_guidance(
+        self,
+        walk: LatentWalk,
+        settings: ExperimentSettings,
+    ) -> tuple[ClipGuidance | None, torch.Tensor | None]:
+        if not settings.clip.enabled:
+            return None, None
+
+        encoder = self._load_clip_encoder()
+        if walk.semantic_embedding is None:
+            current = self._embed_image(walk.image)
+            walk.semantic_embedding = current
+            direction = torch.randn(
+                current.shape,
+                generator=walk.semantic_generator,
+                device=current.device,
+            )
+            direction -= (direction * current).sum(dim=-1, keepdim=True) * current
+            walk.semantic_direction = F.normalize(direction, dim=-1)
+
+        target = F.normalize(
+            walk.semantic_embedding
+            + settings.clip.semantic_step * walk.semantic_direction,
+            dim=-1,
+        )
+        return (
+            ClipGuidance(settings, self._pipeline.vae, encoder, target),
+            target,
+        )
+
+    def _update_clip_state(
+        self,
+        walk: LatentWalk,
+        settings: ExperimentSettings,
+    ) -> float | None:
+        if not settings.clip.enabled:
+            return None
+
+        previous = walk.semantic_embedding
+        current = self._embed_image(walk.image)
+        semantic_change = float(1 - (previous * current).sum())
+        observed = current - previous
+        observed -= (observed * current).sum(dim=-1, keepdim=True) * current
+        if observed.norm() > 1e-6:
+            observed = F.normalize(observed, dim=-1)
+            innovation = torch.randn(
+                current.shape,
+                generator=walk.semantic_generator,
+                device=current.device,
+            )
+            innovation -= (
+                innovation * current
+            ).sum(dim=-1, keepdim=True) * current
+            innovation = F.normalize(innovation, dim=-1)
+            direction = (
+                settings.clip.momentum * walk.semantic_direction
+                + (1 - settings.clip.momentum)
+                * (0.8 * observed + 0.2 * innovation)
+            )
+            direction -= (direction * current).sum(dim=-1, keepdim=True) * current
+            walk.semantic_direction = F.normalize(direction, dim=-1)
+        walk.semantic_embedding = current
+        return semantic_change
 
     def decode_jpeg(self, image: Image.Image, quality: int = 88) -> bytes:
         output = io.BytesIO()

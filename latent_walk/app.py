@@ -267,23 +267,32 @@ async def walk_socket(websocket: WebSocket) -> None:
                 await send_error(websocket, str(exc))
                 continue
 
-            if not model_service.denoiser_loaded:
+            loading_message = model_service.loading_message(settings)
+            if loading_message:
                 await websocket.send_json(
                     {
                         "type": "status",
-                        "message": "Loading SDXL-Turbo on the RTX 4090…",
+                        "message": loading_message,
                     }
                 )
-            change = await asyncio.to_thread(
+            result = await asyncio.to_thread(
                 model_service.denoise_step, walk, settings
             )
-            frame = await asyncio.to_thread(model_service.decode_jpeg, walk.image)
+            frame = await asyncio.to_thread(
+                model_service.decode_jpeg, result.image
+            )
             frames.append(frame)
             await websocket.send_json(
                 {
                     "type": "frame",
                     "step": walk.step_number,
-                    "change": round(change, 4),
+                    "change": round(result.pixel_change, 4),
+                    "semanticChange": (
+                        round(result.semantic_change, 4)
+                        if result.semantic_change is not None
+                        else None
+                    ),
+                    "effective": result.effective_parameters,
                 }
             )
             await websocket.send_bytes(frame)

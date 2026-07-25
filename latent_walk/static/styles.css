@@ -104,6 +104,22 @@ h1 em { color: var(--violet); font-style: normal; }
 input[type="range"] { accent-color: var(--acid); cursor: ew-resize; display: block; height: 2px; margin: 21px 0 2px; width: 100%; }
 .select-control { border-bottom: 1px solid var(--line); display: block; padding: 20px; }
 select { appearance: none; background: #0e0f13 url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='m1 1 4 4 4-4' fill='none' stroke='%238c8b86'/%3E%3C/svg%3E") no-repeat right 12px center; border: 1px solid #303136; color: #c4c3be; font: 10px DM Mono, monospace; margin-top: 14px; outline: none; padding: 11px 12px; width: 100%; }
+.experiment-heading { border-bottom: 1px solid var(--line); padding: 19px 20px; }
+.experiment-heading span { display: block; font: 10px DM Mono, monospace; letter-spacing: .1em; }
+.experiment-heading small { color: #6f7076; font-size: 10px; }
+.experiment { border-bottom: 1px solid var(--line); }
+.experiment summary { align-items: center; cursor: pointer; display: flex; gap: 12px; justify-content: space-between; list-style: none; padding: 16px 20px; }
+.experiment summary::-webkit-details-marker { display: none; }
+.experiment summary > span { display: block; }
+.experiment summary b { font-size: 11px; font-weight: 500; }
+.experiment summary small { color: #6f7076; display: block; font-size: 9px; margin-top: 3px; }
+.experiment summary input { accent-color: var(--acid); flex: 0 0 auto; height: 16px; width: 16px; }
+.experiment-body { background: #0e0f13; border-top: 1px solid var(--line); padding: 6px 20px 14px; }
+.mini-control, .mini-select { display: block; padding-top: 12px; }
+.mini-control > span, .mini-select > span { color: #aaa9a4; display: flex; font-size: 10px; justify-content: space-between; }
+.mini-control output { color: var(--acid); font: 9px DM Mono, monospace; }
+.mini-control input[type="range"] { margin: 14px 0 3px; }
+.mini-select select { margin-top: 8px; }
 .status-line { align-items: center; color: var(--muted); display: flex; font: 9px DM Mono, monospace; gap: 9px; padding: 17px 20px; text-transform: uppercase; }
 .status-dot { background: #55565b; border-radius: 50%; height: 6px; width: 6px; }
 .status-dot.ready { background: var(--acid); box-shadow: 0 0 7px var(--acid); }
@@ -141,7 +157,7 @@ footer { border-top: 1px solid var(--line); color: #5f6065; display: flex; font:
   .lede { margin: 32px 0 0; }
   .studio { grid-template-columns: 1fr; }
   .controls { display: grid; grid-template-columns: 1fr 1fr; }
-  .control-heading, .status-line, .select-control { grid-column: 1 / -1; }
+  .control-heading, .status-line, .select-control, .experiment-heading, .experiment { grid-column: 1 / -1; }
   .control:nth-of-type(odd) { border-left: 1px solid var(--line); }
   .frames { grid-template-columns: repeat(4, 1fr); }
 }

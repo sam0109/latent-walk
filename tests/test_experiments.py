@@ -1,0 +1,105 @@
+import torch
+from PIL import Image
+
+from latent_walk.experiments import (
+    ExperimentSettings,
+    FrequencyNoiseStrategy,
+    FrequencySettings,
+    WalkState,
+)
+
+
+def state() -> WalkState:
+    return WalkState(Image.new("RGB", (512, 512), "black"), seed=7)
+
+
+def test_experiment_settings_parse_and_bound_values() -> None:
+    settings = ExperimentSettings.from_message(
+        {
+            "experiments": {
+                "frequency": {
+                    "enabled": True,
+                    "low": 9,
+                    "mid": 0.4,
+                    "high": -2,
+                    "persistence": 2,
+                },
+                "clip": {"enabled": True, "semanticStep": 0.12},
+                "ipAdapter": {
+                    "enabled": True,
+                    "weight": 0.7,
+                    "memory": "lagged",
+                    "lag": 8,
+                    "decay": 0.7,
+                },
+            }
+        }
+    )
+
+    assert settings.frequency.enabled
+    assert settings.frequency.low == 2
+    assert settings.frequency.high == 0
+    assert settings.frequency.persistence == 0.98
+    assert settings.clip.semantic_step == 0.12
+    assert settings.ip_adapter.memory == "lagged"
+    assert settings.ip_adapter.lag == 8
+    assert settings.ip_adapter.decay == 0.7
+
+
+def test_experiment_defaults_use_calibrated_safe_values() -> None:
+    settings = ExperimentSettings.from_message({})
+
+    assert settings.clip.guidance == 0.005
+    assert settings.ip_adapter.weight == 0.2
+
+
+def test_frequency_noise_preserves_unit_variance() -> None:
+    strategy = FrequencyNoiseStrategy()
+    latent = torch.zeros(1, 4, 64, 64)
+    generator = torch.Generator().manual_seed(5)
+
+    noise = strategy.sample(
+        latent,
+        state(),
+        FrequencySettings(enabled=True, low=0.3, mid=1.2, high=0.7),
+        generator,
+    )
+
+    assert noise.square().mean().sqrt() == torch.tensor(1.0)
+
+
+def test_low_frequency_noise_is_spatially_smoother() -> None:
+    strategy = FrequencyNoiseStrategy()
+    latent = torch.zeros(1, 4, 64, 64)
+    low = strategy.sample(
+        latent,
+        state(),
+        FrequencySettings(enabled=True, low=1, mid=0, high=0, persistence=0),
+        torch.Generator().manual_seed(9),
+    )
+    high = strategy.sample(
+        latent,
+        state(),
+        FrequencySettings(enabled=True, low=0, mid=0, high=1, persistence=0),
+        torch.Generator().manual_seed(9),
+    )
+
+    low_gradient = (low[..., 1:] - low[..., :-1]).abs().mean()
+    high_gradient = (high[..., 1:] - high[..., :-1]).abs().mean()
+    assert low_gradient < high_gradient * 0.1
+
+
+def test_frequency_persistence_correlates_steps() -> None:
+    strategy = FrequencyNoiseStrategy()
+    latent = torch.zeros(1, 4, 64, 64)
+    walk = state()
+    settings = FrequencySettings(enabled=True, persistence=0.95)
+    generator = torch.Generator().manual_seed(3)
+
+    first = strategy.sample(latent, walk, settings, generator)
+    second = strategy.sample(latent, walk, settings, generator)
+    correlation = torch.corrcoef(
+        torch.stack((first.flatten(), second.flatten()))
+    )[0, 1]
+
+    assert correlation > 0.85

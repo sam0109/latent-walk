@@ -43,6 +43,7 @@
             <div class="stage-hud" id="stageHud" hidden>
               <span>STEP <b id="stepCount">0000</b></span>
               <span>MOVE <b id="driftValue">0.000</b></span>
+              <span id="semanticHud" hidden>SEM <b id="semanticValue">0.000</b></span>
             </div>
             <div class="loading" id="loading" hidden>
               <span class="spinner"></span>
@@ -88,11 +89,50 @@
             <input id="fps" type="range" min="1" max="4" step="1" value="4" />
           </label>
           <label class="select-control">
-            <span><b>Resolution</b><small>Higher is slower on CPU</small></span>
+            <span><b>Resolution</b><small>Native SDXL-Turbo size</small></span>
             <select id="resolution">
               <option value="512" selected>512 × 512 · Native</option>
             </select>
           </label>
+          <div class="experiment-heading">
+            <span>EXPERIMENTAL INTERVENTIONS</span>
+            <small>Independent and composable</small>
+          </div>
+          <details class="experiment">
+            <summary>
+              <span><b>Frequency-shaped noise</b><small>Composition · form · texture</small></span>
+              <input id="frequencyEnabled" type="checkbox" aria-label="Enable frequency-shaped noise" />
+            </summary>
+            <div class="experiment-body">
+              <label class="mini-control"><span>Composition <output id="frequencyLowOutput">1.00</output></span><input id="frequencyLow" type="range" min="0" max="2" step="0.05" value="1" /></label>
+              <label class="mini-control"><span>Form <output id="frequencyMidOutput">1.00</output></span><input id="frequencyMid" type="range" min="0" max="2" step="0.05" value="1" /></label>
+              <label class="mini-control"><span>Texture <output id="frequencyHighOutput">1.00</output></span><input id="frequencyHigh" type="range" min="0" max="2" step="0.05" value="1" /></label>
+              <label class="mini-control"><span>Persistence <output id="frequencyPersistenceOutput">0.50</output></span><input id="frequencyPersistence" type="range" min="0" max="0.98" step="0.01" value="0.5" /></label>
+            </div>
+          </details>
+          <details class="experiment">
+            <summary>
+              <span><b>CLIP semantic velocity</b><small>Steer through concepts</small></span>
+              <input id="clipEnabled" type="checkbox" aria-label="Enable CLIP semantic velocity" />
+            </summary>
+            <div class="experiment-body">
+              <label class="mini-control"><span>Semantic step <output id="clipStepOutput">0.080</output></span><input id="clipStep" type="range" min="0.005" max="0.3" step="0.005" value="0.08" /></label>
+              <label class="mini-control"><span>Momentum <output id="clipMomentumOutput">0.85</output></span><input id="clipMomentum" type="range" min="0" max="0.98" step="0.01" value="0.85" /></label>
+              <label class="mini-control"><span>Guidance <output id="clipGuidanceOutput">0.005</output></span><input id="clipGuidance" type="range" min="0" max="0.025" step="0.0025" value="0.005" /></label>
+            </div>
+          </details>
+          <details class="experiment">
+            <summary>
+              <span><b>IP-Adapter memory</b><small>Retain prior image semantics</small></span>
+              <input id="ipEnabled" type="checkbox" aria-label="Enable IP-Adapter memory" />
+            </summary>
+            <div class="experiment-body">
+              <label class="mini-control"><span>Memory weight <output id="ipWeightOutput">0.20</output></span><input id="ipWeight" type="range" min="0" max="1.5" step="0.05" value="0.2" /></label>
+              <label class="mini-select"><span>Memory source</span><select id="ipMemory"><option value="previous">Previous frame</option><option value="ema">Recent EMA</option><option value="lagged">Lagged frame</option><option value="random">Random history</option></select></label>
+              <label class="mini-control"><span>Lag <output id="ipLagOutput">4</output></span><input id="ipLag" type="range" min="1" max="24" step="1" value="4" /></label>
+              <label class="mini-control"><span>EMA decay <output id="ipDecayOutput">0.85</output></span><input id="ipDecay" type="range" min="0" max="0.99" step="0.01" value="0.85" /></label>
+            </div>
+          </details>
           <div class="status-line">
             <span class="status-dot" id="statusDot"></span>
             <span id="statusText">Waiting for an image</span>

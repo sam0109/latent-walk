@@ -17,6 +17,8 @@ const elements = {
   hud: $("#stageHud"),
   stepCount: $("#stepCount"),
   drift: $("#driftValue"),
+  semanticHud: $("#semanticHud"),
+  semantic: $("#semanticValue"),
   status: $("#statusText"),
   statusDot: $("#statusDot"),
   timeline: $("#timeline"),
@@ -26,6 +28,20 @@ const elements = {
   noiseStrength: $("#noiseStrength"),
   denoiseSteps: $("#denoiseSteps"),
   fps: $("#fps"),
+  frequencyEnabled: $("#frequencyEnabled"),
+  frequencyLow: $("#frequencyLow"),
+  frequencyMid: $("#frequencyMid"),
+  frequencyHigh: $("#frequencyHigh"),
+  frequencyPersistence: $("#frequencyPersistence"),
+  clipEnabled: $("#clipEnabled"),
+  clipStep: $("#clipStep"),
+  clipMomentum: $("#clipMomentum"),
+  clipGuidance: $("#clipGuidance"),
+  ipEnabled: $("#ipEnabled"),
+  ipWeight: $("#ipWeight"),
+  ipMemory: $("#ipMemory"),
+  ipLag: $("#ipLag"),
+  ipDecay: $("#ipDecay"),
 };
 
 let sourceFile = null;
@@ -45,10 +61,27 @@ const controls = [
   [elements.noiseStrength, $("#noiseStrengthOutput"), (value) => Number(value).toFixed(2)],
   [elements.denoiseSteps, $("#denoiseStepsOutput"), (value) => value],
   [elements.fps, $("#fpsOutput"), (value) => `${value} fps`],
+  [elements.frequencyLow, $("#frequencyLowOutput"), (value) => Number(value).toFixed(2)],
+  [elements.frequencyMid, $("#frequencyMidOutput"), (value) => Number(value).toFixed(2)],
+  [elements.frequencyHigh, $("#frequencyHighOutput"), (value) => Number(value).toFixed(2)],
+  [elements.frequencyPersistence, $("#frequencyPersistenceOutput"), (value) => Number(value).toFixed(2)],
+  [elements.clipStep, $("#clipStepOutput"), (value) => Number(value).toFixed(3)],
+  [elements.clipMomentum, $("#clipMomentumOutput"), (value) => Number(value).toFixed(2)],
+  [elements.clipGuidance, $("#clipGuidanceOutput"), (value) => Number(value).toFixed(3)],
+  [elements.ipWeight, $("#ipWeightOutput"), (value) => Number(value).toFixed(2)],
+  [elements.ipLag, $("#ipLagOutput"), (value) => value],
+  [elements.ipDecay, $("#ipDecayOutput"), (value) => Number(value).toFixed(2)],
 ];
 
 for (const [input, output, format] of controls) {
   input.addEventListener("input", () => { output.value = format(input.value); });
+}
+for (const checkbox of [
+  elements.frequencyEnabled,
+  elements.clipEnabled,
+  elements.ipEnabled,
+]) {
+  checkbox.addEventListener("click", (event) => event.stopPropagation());
 }
 
 function setStatus(text, state = "") {
@@ -95,6 +128,10 @@ async function replaceImage(blob, meta, addToHistory = true) {
   elements.hud.hidden = false;
   elements.stepCount.textContent = String(meta.step ?? 0).padStart(4, "0");
   elements.drift.textContent = Number(meta.change ?? 0).toFixed(3);
+  elements.semanticHud.hidden = meta.semanticChange == null;
+  if (meta.semanticChange != null) {
+    elements.semantic.textContent = Number(meta.semanticChange).toFixed(3);
+  }
   elements.download.disabled = false;
 
   if (addToHistory && meta.step > 0 && meta.step % 2 === 0) {
@@ -135,6 +172,28 @@ function requestStep() {
     type: "step",
     noiseStrength: Number(elements.noiseStrength.value),
     denoiseSteps: Number(elements.denoiseSteps.value),
+    experiments: {
+      frequency: {
+        enabled: elements.frequencyEnabled.checked,
+        low: Number(elements.frequencyLow.value),
+        mid: Number(elements.frequencyMid.value),
+        high: Number(elements.frequencyHigh.value),
+        persistence: Number(elements.frequencyPersistence.value),
+      },
+      clip: {
+        enabled: elements.clipEnabled.checked,
+        semanticStep: Number(elements.clipStep.value),
+        momentum: Number(elements.clipMomentum.value),
+        guidance: Number(elements.clipGuidance.value),
+      },
+      ipAdapter: {
+        enabled: elements.ipEnabled.checked,
+        weight: Number(elements.ipWeight.value),
+        memory: elements.ipMemory.value,
+        lag: Number(elements.ipLag.value),
+        decay: Number(elements.ipDecay.value),
+      },
+    },
   }));
 }
 
@@ -307,11 +366,15 @@ elements.download.addEventListener("click", () => {
 elements.video.addEventListener("click", downloadRecording);
 
 elements.defaults.addEventListener("click", () => {
-  const defaults = ["0.45", "2", "4"];
+  const defaults = ["0.45", "2", "4", "1", "1", "1", "0.5", "0.08", "0.85", "0.005", "0.2", "4", "0.85"];
   controls.forEach(([input], index) => {
     input.value = defaults[index];
     input.dispatchEvent(new Event("input"));
   });
+  elements.frequencyEnabled.checked = false;
+  elements.clipEnabled.checked = false;
+  elements.ipEnabled.checked = false;
+  elements.ipMemory.value = "previous";
 });
 
 for (const eventName of ["dragenter", "dragover"]) {
