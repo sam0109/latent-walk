@@ -83,9 +83,10 @@ persistent systemd user service.
 Each intervention can run alone or alongside the others:
 
 - **Frequency-shaped noise** replaces the scheduler's Gaussian proposal with
-  independently weighted composition, form, and texture bands. The bands have
-  persistent state across frames, but their combined tensor is normalized back
-  to unit RMS before it enters the scheduler.
+  composition, form, and texture bands weighted relative to their natural
+  spectral energy. Equal weights reconstruct ordinary Gaussian noise. The bands
+  have persistent state across frames, and their combined tensor is normalized
+  back to unit RMS before it enters the scheduler.
 - **CLIP semantic velocity** maintains a tangent direction on the normalized
   CLIP image-embedding sphere. A differentiable VAE-to-CLIP path nudges
   non-terminal denoising latents toward the next semantic target. Gradients are

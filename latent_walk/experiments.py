@@ -237,9 +237,9 @@ class FrequencyNoiseStrategy:
         low = gaussian_blur(raw, sigma=6.0)
         mid_smooth = gaussian_blur(raw, sigma=1.5)
         bands = {
-            "low": _normalize(low),
-            "mid": _normalize(mid_smooth - low),
-            "high": _normalize(raw - mid_smooth),
+            "low": low,
+            "mid": mid_smooth - low,
+            "high": raw - mid_smooth,
         }
 
         persistence = settings.persistence
@@ -248,7 +248,6 @@ class FrequencyNoiseStrategy:
             previous = state.frequency_memory.get(name)
             if previous is not None and previous.shape == band.shape:
                 band = persistence * previous + innovation * band
-                band = _normalize(band)
             state.frequency_memory[name] = band.detach()
             bands[name] = band
 

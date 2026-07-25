@@ -107,6 +107,25 @@ def test_frequency_noise_preserves_unit_variance() -> None:
     assert noise.square().mean().sqrt() == torch.tensor(1.0)
 
 
+def test_equal_frequency_weights_preserve_white_noise_spectrum() -> None:
+    strategy = FrequencyNoiseStrategy()
+    latent = torch.zeros(1, 4, 64, 64)
+    expected = torch.randn(
+        latent.shape,
+        generator=torch.Generator().manual_seed(7),
+    )
+    expected /= expected.square().mean().sqrt()
+
+    noise = strategy.sample(
+        latent,
+        state(),
+        FrequencySettings(persistence=0),
+        torch.Generator().manual_seed(7),
+    )
+
+    torch.testing.assert_close(noise, expected, atol=2e-7, rtol=2e-7)
+
+
 def test_low_frequency_noise_is_spatially_smoother() -> None:
     strategy = FrequencyNoiseStrategy()
     latent = torch.zeros(1, 4, 64, 64)

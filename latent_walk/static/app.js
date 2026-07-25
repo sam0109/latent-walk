@@ -198,7 +198,7 @@ function applySettings(settings) {
 const presets = {
   baseline: {},
   composition: {
-    frequency: { enabled: true, low: 1.4, mid: 0.7, high: 0.2, persistence: 0.8 },
+    frequency: { enabled: true, low: 1.4, mid: 1, high: 0.8, persistence: 0.65 },
   },
   semantic: {
     clip: { enabled: true, semanticStep: 0.08, momentum: 0.85, guidance: 0.005 },
@@ -207,7 +207,7 @@ const presets = {
     ipAdapter: { enabled: true, weight: 0.2, memory: "ema", modulation: "decay" },
   },
   turbulent: {
-    frequency: { enabled: true, low: 1.2, mid: 0.9, high: 0.5, persistence: 0.65 },
+    frequency: { enabled: true, low: 1.2, mid: 1, high: 0.8, persistence: 0.55 },
     clip: { enabled: true, semanticStep: 0.1, momentum: 0.75, guidance: 0.005 },
     ipAdapter: { enabled: true, weight: 0.15, memory: "random", modulation: "pulse" },
   },
