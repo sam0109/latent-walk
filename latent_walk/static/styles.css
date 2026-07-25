@@ -104,6 +104,14 @@ h1 em { color: var(--violet); font-style: normal; }
 input[type="range"] { accent-color: var(--acid); cursor: ew-resize; display: block; height: 2px; margin: 21px 0 2px; width: 100%; }
 .select-control { border-bottom: 1px solid var(--line); display: block; padding: 20px; }
 select { appearance: none; background: #0e0f13 url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='m1 1 4 4 4-4' fill='none' stroke='%238c8b86'/%3E%3C/svg%3E") no-repeat right 12px center; border: 1px solid #303136; color: #c4c3be; font: 10px DM Mono, monospace; margin-top: 14px; outline: none; padding: 11px 12px; width: 100%; }
+.seed-control { border-bottom: 1px solid var(--line); padding: 20px; }
+.seed-control > span { display: block; }
+.seed-control b { font-size: 12px; font-weight: 500; }
+.seed-control small { color: #6f7076; display: block; font-size: 10px; margin-top: 4px; }
+.seed-control > div { display: flex; margin-top: 14px; }
+.seed-control input { background: #0e0f13; border: 1px solid #303136; color: #c4c3be; font: 10px DM Mono, monospace; min-width: 0; outline: none; padding: 11px 12px; width: 100%; }
+.seed-control button { background: #202126; border: 1px solid #303136; cursor: pointer; font: 8px DM Mono, monospace; padding: 0 10px; }
+.seed-control .manifest-import { height: 34px; margin-top: 8px; width: 100%; }
 .experiment-heading { border-bottom: 1px solid var(--line); padding: 19px 20px; }
 .experiment-heading span { display: block; font: 10px DM Mono, monospace; letter-spacing: .1em; }
 .experiment-heading small { color: #6f7076; font-size: 10px; }
@@ -120,6 +128,13 @@ select { appearance: none; background: #0e0f13 url("data:image/svg+xml,%3Csvg xm
 .mini-control output { color: var(--acid); font: 9px DM Mono, monospace; }
 .mini-control input[type="range"] { margin: 14px 0 3px; }
 .mini-select select { margin-top: 8px; }
+.experiment-toggle { align-items: center; border-bottom: 1px solid var(--line); display: flex; justify-content: space-between; padding: 16px 20px; }
+.experiment-toggle b { font-size: 11px; font-weight: 500; }
+.experiment-toggle small { color: #6f7076; display: block; font-size: 9px; margin-top: 3px; }
+.experiment-toggle input { accent-color: var(--acid); height: 16px; width: 16px; }
+.metric-readout { background: #0e0f13; border-bottom: 1px solid var(--line); display: grid; gap: 8px; grid-template-columns: 1fr 1fr; padding: 14px 20px; }
+.metric-readout span { color: #6f7076; font: 8px DM Mono, monospace; }
+.metric-readout b { color: var(--acid); float: right; font-weight: 400; }
 .status-line { align-items: center; color: var(--muted); display: flex; font: 9px DM Mono, monospace; gap: 9px; padding: 17px 20px; text-transform: uppercase; }
 .status-dot { background: #55565b; border-radius: 50%; height: 6px; width: 6px; }
 .status-dot.ready { background: var(--acid); box-shadow: 0 0 7px var(--acid); }
@@ -157,7 +172,7 @@ footer { border-top: 1px solid var(--line); color: #5f6065; display: flex; font:
   .lede { margin: 32px 0 0; }
   .studio { grid-template-columns: 1fr; }
   .controls { display: grid; grid-template-columns: 1fr 1fr; }
-  .control-heading, .status-line, .select-control, .experiment-heading, .experiment { grid-column: 1 / -1; }
+  .control-heading, .status-line, .select-control, .seed-control, .experiment-heading, .experiment, .experiment-toggle, .metric-readout { grid-column: 1 / -1; }
   .control:nth-of-type(odd) { border-left: 1px solid var(--line); }
   .frames { grid-template-columns: repeat(4, 1fr); }
 }
@@ -172,6 +187,8 @@ footer { border-top: 1px solid var(--line); color: #5f6065; display: flex; font:
   .controls { display: block; }
   .control:nth-of-type(odd) { border-left: 0; }
   .frames { grid-template-columns: repeat(3, 1fr); }
+  .stage-actions { flex-wrap: wrap; }
+  .stage-actions .primary { flex: 1 0 calc(100% - 120px); }
   footer { gap: 10px; }
   .login-shell { width: calc(100% - 36px); }
   .login-brand { height: 66px; }

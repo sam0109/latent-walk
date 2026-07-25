@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import io
 import math
+import os
 import secrets
 import threading
 from dataclasses import dataclass, field
 
 import av
-import numpy as np
+
+os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
+
 import torch
 import torch.nn.functional as F
 from diffusers import AutoPipelineForImage2Image
@@ -17,10 +20,14 @@ from transformers import CLIPVisionModelWithProjection
 from latent_walk.experiments import (
     ExperimentSettings,
     FrequencyNoiseStrategy,
+    IpAdapterSettings,
     StepResult,
     WalkState,
     gaussian_blur,
 )
+from latent_walk.metrics import MetricSuite, image_tensor
+
+torch.use_deterministic_algorithms(True)
 
 MODEL_ID = "stabilityai/sdxl-turbo"
 MAX_UPLOAD_BYTES = 12 * 1024 * 1024
@@ -46,6 +53,13 @@ class WalkSettings:
             denoise_steps=_bounded_int(message, "denoiseSteps", 2, 1, 4),
             experiments=ExperimentSettings.from_message(message),
         )
+
+    def to_message(self) -> dict[str, object]:
+        return {
+            "noiseStrength": self.noise_strength,
+            "denoiseSteps": self.denoise_steps,
+            "experiments": self.experiments.to_message(),
+        }
 
 
 def _bounded_float(
@@ -104,8 +118,11 @@ def encode_mp4(frames: list[bytes], fps: int) -> bytes:
 
 
 class LatentWalk(WalkState):
-    def __init__(self, image: Image.Image) -> None:
-        super().__init__(image=image, seed=secrets.randbits(63))
+    def __init__(self, image: Image.Image, seed: int | None = None) -> None:
+        super().__init__(
+            image=image,
+            seed=seed if seed is not None else secrets.randbits(63),
+        )
 
     def advance(self, image: Image.Image) -> float:
         difference = ImageChops.difference(self.image, image)
@@ -165,18 +182,22 @@ class ClipGuidance:
 
     def _embed_pixels(self, pixels: torch.Tensor) -> torch.Tensor:
         pixels = (pixels * 0.5 + 0.5).clamp(0, 1)
-        pixels = F.interpolate(
-            pixels,
-            size=(224, 224),
-            mode="bicubic",
-            align_corners=False,
-            antialias=True,
-        )
+        pixels = self._resize_clip_pixels(pixels)
         mean = pixels.new_tensor([0.48145466, 0.4578275, 0.40821073])
         std = pixels.new_tensor([0.26862954, 0.26130258, 0.27577711])
         pixels = (pixels - mean.view(1, 3, 1, 1)) / std.view(1, 3, 1, 1)
         output = self.image_encoder(pixel_values=pixels.to(torch.float16))
         return F.normalize(output.image_embeds.float(), dim=-1)
+
+    @staticmethod
+    def _resize_clip_pixels(pixels: torch.Tensor) -> torch.Tensor:
+        pixels = F.avg_pool2d(pixels, kernel_size=2, stride=2)
+        return F.interpolate(
+            pixels,
+            size=(224, 224),
+            mode="bilinear",
+            align_corners=False,
+        )
 
 
 class ModelService:
@@ -185,6 +206,7 @@ class ModelService:
         self._clip_encoder: CLIPVisionModelWithProjection | None = None
         self._ip_adapter_loaded = False
         self._frequency_noise = FrequencyNoiseStrategy()
+        self._metrics = MetricSuite()
         self._load_lock = threading.Lock()
         self._inference_lock = threading.Lock()
 
@@ -203,6 +225,8 @@ class ModelService:
             return "Loading the CLIP semantic encoder…"
         if settings.experiments.ip_adapter.enabled and not self._ip_adapter_loaded:
             return "Loading the IP-Adapter image encoder…"
+        if settings.experiments.metrics.enabled and not self._metrics.loaded:
+            return "Loading perceptual metrics…"
         return None
 
     def load(self) -> AutoPipelineForImage2Image:
@@ -248,7 +272,10 @@ class ModelService:
                     device="cuda"
                 ).manual_seed(walk.seed ^ 0x49504144)
 
-            ip_kwargs = self._prepare_ip_adapter(walk, settings.experiments)
+            ip_kwargs, effective_ip_weight = self._prepare_ip_adapter(
+                walk,
+                settings.experiments,
+            )
             callback, clip_target = self._prepare_clip_guidance(
                 walk,
                 settings.experiments,
@@ -273,8 +300,17 @@ class ModelService:
                     **ip_kwargs,
                 ).images[0]
 
+            previous_image = walk.image
             change = walk.advance(result)
             semantic_change = self._update_clip_state(walk, settings.experiments)
+            metrics = (
+                self._metrics.compute(previous_image, result)
+                if settings.experiments.metrics.enabled
+                else {}
+            )
+            metrics["pixelRms"] = change
+            if semantic_change is not None:
+                metrics["semanticChange"] = semantic_change
             if clip_target is not None and walk.semantic_embedding is not None:
                 target_similarity = float(
                     (walk.semantic_embedding * clip_target).sum()
@@ -285,10 +321,12 @@ class ModelService:
                 image=result,
                 pixel_change=change,
                 semantic_change=semantic_change,
+                metrics=metrics,
                 effective_parameters={
                     "frequency": settings.experiments.frequency.enabled,
                     "clip": settings.experiments.clip.enabled,
                     "ipAdapter": settings.experiments.ip_adapter.enabled,
+                    "ipAdapterWeight": effective_ip_weight,
                     "clipTargetSimilarity": target_similarity,
                 },
             )
@@ -339,14 +377,14 @@ class ModelService:
         self,
         walk: LatentWalk,
         settings: ExperimentSettings,
-    ) -> dict[str, object]:
+    ) -> tuple[dict[str, object], float]:
         adapter = settings.ip_adapter
         pipeline = self._pipeline
         if not adapter.enabled:
             if self._ip_adapter_loaded:
                 pipeline.unload_ip_adapter()
                 self._ip_adapter_loaded = False
-            return {}
+            return {}, 0.0
 
         if not self._ip_adapter_loaded:
             pipeline.load_ip_adapter(
@@ -359,7 +397,8 @@ class ModelService:
             pipeline.image_encoder.requires_grad_(False)
             self._ip_adapter_loaded = True
 
-        pipeline.set_ip_adapter_scale(adapter.weight)
+        effective_weight = self._effective_ip_weight(walk, adapter)
+        pipeline.set_ip_adapter_scale(effective_weight)
         if adapter.memory == "ema":
             embeds = pipeline.prepare_ip_adapter_image_embeds(
                 ip_adapter_image=walk.image,
@@ -375,7 +414,7 @@ class ModelService:
                     adapter.decay * walk.ip_adapter_ema
                     + (1 - adapter.decay) * embeds
                 )
-            return {"ip_adapter_image_embeds": [walk.ip_adapter_ema]}
+            return {"ip_adapter_image_embeds": [walk.ip_adapter_ema]}, effective_weight
 
         history = list(walk.history)
         source = walk.image
@@ -389,7 +428,25 @@ class ModelService:
                 device="cuda",
             ).item()
             source = history[index]
-        return {"ip_adapter_image": source}
+        return {"ip_adapter_image": source}, effective_weight
+
+    def _effective_ip_weight(
+        self,
+        walk: LatentWalk,
+        adapter: IpAdapterSettings,
+    ) -> float:
+        if adapter.modulation == "decay":
+            return adapter.weight * math.exp(
+                -adapter.modulation_rate * walk.step_number
+            )
+        if adapter.modulation == "pulse":
+            phase = walk.step_number % adapter.pulse_period
+            active = phase < adapter.pulse_period * adapter.pulse_duty
+            return adapter.weight if active else 0.0
+        if adapter.modulation == "feedback" and walk.last_semantic_change is not None:
+            ratio = walk.last_semantic_change / adapter.feedback_target
+            return min(adapter.weight * min(max(ratio, 0.25), 2.0), 1.5)
+        return adapter.weight
 
     def _load_clip_encoder(self) -> CLIPVisionModelWithProjection:
         if self._clip_encoder is None:
@@ -404,16 +461,8 @@ class ModelService:
 
     def _embed_image(self, image: Image.Image) -> torch.Tensor:
         encoder = self._load_clip_encoder()
-        pixels = torch.from_numpy(
-            np.asarray(image.convert("RGB"), dtype=np.float32).copy()
-        ).permute(2, 0, 1).unsqueeze(0).to("cuda") / 255
-        pixels = F.interpolate(
-            pixels,
-            size=(224, 224),
-            mode="bicubic",
-            align_corners=False,
-            antialias=True,
-        ).clamp(0, 1)
+        pixels = image_tensor(image)
+        pixels = ClipGuidance._resize_clip_pixels(pixels).clamp(0, 1)
         mean = pixels.new_tensor([0.48145466, 0.4578275, 0.40821073])
         std = pixels.new_tensor([0.26862954, 0.26130258, 0.27577711])
         pixels = (pixels - mean.view(1, 3, 1, 1)) / std.view(1, 3, 1, 1)
@@ -426,7 +475,15 @@ class ModelService:
         walk: LatentWalk,
         settings: ExperimentSettings,
     ) -> tuple[ClipGuidance | None, torch.Tensor | None]:
-        if not settings.clip.enabled:
+        track_semantics = (
+            settings.clip.enabled
+            or settings.metrics.enabled
+            or (
+                settings.ip_adapter.enabled
+                and settings.ip_adapter.modulation == "feedback"
+            )
+        )
+        if not track_semantics:
             return None, None
 
         encoder = self._load_clip_encoder()
@@ -440,6 +497,9 @@ class ModelService:
             )
             direction -= (direction * current).sum(dim=-1, keepdim=True) * current
             walk.semantic_direction = F.normalize(direction, dim=-1)
+
+        if not settings.clip.enabled:
+            return None, None
 
         target = F.normalize(
             walk.semantic_embedding
@@ -456,7 +516,15 @@ class ModelService:
         walk: LatentWalk,
         settings: ExperimentSettings,
     ) -> float | None:
-        if not settings.clip.enabled:
+        track_semantics = (
+            settings.clip.enabled
+            or settings.metrics.enabled
+            or (
+                settings.ip_adapter.enabled
+                and settings.ip_adapter.modulation == "feedback"
+            )
+        )
+        if not track_semantics:
             return None
 
         previous = walk.semantic_embedding
@@ -483,6 +551,7 @@ class ModelService:
             direction -= (direction * current).sum(dim=-1, keepdim=True) * current
             walk.semantic_direction = F.normalize(direction, dim=-1)
         walk.semantic_embedding = current
+        walk.last_semantic_change = semantic_change
         return semantic_change
 
     def decode_jpeg(self, image: Image.Image, quality: int = 88) -> bytes:

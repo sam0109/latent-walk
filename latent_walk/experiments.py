@@ -34,6 +34,16 @@ class IpAdapterSettings:
     memory: str = "previous"
     lag: int = 4
     decay: float = 0.85
+    modulation: str = "constant"
+    modulation_rate: float = 0.08
+    pulse_period: int = 8
+    pulse_duty: float = 0.5
+    feedback_target: float = 0.08
+
+
+@dataclass(frozen=True)
+class MetricSettings:
+    enabled: bool = False
 
 
 @dataclass(frozen=True)
@@ -41,6 +51,7 @@ class ExperimentSettings:
     frequency: FrequencySettings = field(default_factory=FrequencySettings)
     clip: ClipSettings = field(default_factory=ClipSettings)
     ip_adapter: IpAdapterSettings = field(default_factory=IpAdapterSettings)
+    metrics: MetricSettings = field(default_factory=MetricSettings)
 
     @classmethod
     def from_message(cls, message: dict[str, object]) -> "ExperimentSettings":
@@ -51,9 +62,13 @@ class ExperimentSettings:
         frequency = _section(raw, "frequency")
         clip = _section(raw, "clip")
         ip_adapter = _section(raw, "ipAdapter")
+        metrics = _section(raw, "metrics")
         memory = ip_adapter.get("memory", "previous")
         if memory not in {"previous", "ema", "lagged", "random"}:
             raise ValueError("ipAdapter.memory is invalid")
+        modulation = ip_adapter.get("modulation", "constant")
+        if modulation not in {"constant", "decay", "pulse", "feedback"}:
+            raise ValueError("ipAdapter.modulation is invalid")
 
         return cls(
             frequency=FrequencySettings(
@@ -79,8 +94,56 @@ class ExperimentSettings:
                 memory=memory,
                 lag=_integer(ip_adapter, "lag", 4, 1, 24),
                 decay=_number(ip_adapter, "decay", 0.85, 0.0, 0.99),
+                modulation=modulation,
+                modulation_rate=_number(
+                    ip_adapter, "modulationRate", 0.08, 0.0, 1.0
+                ),
+                pulse_period=_integer(
+                    ip_adapter, "pulsePeriod", 8, 2, 64
+                ),
+                pulse_duty=_number(
+                    ip_adapter, "pulseDuty", 0.5, 0.05, 1.0
+                ),
+                feedback_target=_number(
+                    ip_adapter, "feedbackTarget", 0.08, 0.001, 0.5
+                ),
+            ),
+            metrics=MetricSettings(
+                enabled=_boolean(metrics, "enabled", False),
             ),
         )
+
+    def to_message(self) -> dict[str, object]:
+        return {
+            "frequency": {
+                "enabled": self.frequency.enabled,
+                "low": self.frequency.low,
+                "mid": self.frequency.mid,
+                "high": self.frequency.high,
+                "persistence": self.frequency.persistence,
+            },
+            "clip": {
+                "enabled": self.clip.enabled,
+                "semanticStep": self.clip.semantic_step,
+                "momentum": self.clip.momentum,
+                "guidance": self.clip.guidance,
+            },
+            "ipAdapter": {
+                "enabled": self.ip_adapter.enabled,
+                "weight": self.ip_adapter.weight,
+                "memory": self.ip_adapter.memory,
+                "lag": self.ip_adapter.lag,
+                "decay": self.ip_adapter.decay,
+                "modulation": self.ip_adapter.modulation,
+                "modulationRate": self.ip_adapter.modulation_rate,
+                "pulsePeriod": self.ip_adapter.pulse_period,
+                "pulseDuty": self.ip_adapter.pulse_duty,
+                "feedbackTarget": self.ip_adapter.feedback_target,
+            },
+            "metrics": {
+                "enabled": self.metrics.enabled,
+            },
+        }
 
 
 @dataclass
@@ -98,6 +161,7 @@ class WalkState:
     semantic_embedding: torch.Tensor | None = None
     semantic_direction: torch.Tensor | None = None
     ip_adapter_ema: torch.Tensor | None = None
+    last_semantic_change: float | None = None
 
     def __post_init__(self) -> None:
         self.image = self.image.copy()
@@ -114,6 +178,7 @@ class StepResult:
     image: Image.Image
     pixel_change: float
     semantic_change: float | None = None
+    metrics: dict[str, float] = field(default_factory=dict)
     effective_parameters: dict[str, object] = field(default_factory=dict)
 
 

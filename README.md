@@ -37,6 +37,8 @@ uv run uvicorn latent_walk.app:app --host 127.0.0.1 --port 8000
 
 Open <http://127.0.0.1:8000>. The first walk step downloads and loads
 SDXL-Turbo; later runs use the local Hugging Face cache. A CUDA GPU is required.
+CLIP, IP-Adapter, and LPIPS/AlexNet weights load lazily only when their
+corresponding controls are enabled.
 
 Create a password hash without putting the plaintext password in a shell
 argument:
@@ -71,6 +73,10 @@ persistent systemd user service.
   image receives exactly one frame interval at the selected playback FPS,
   regardless of generation or network speed. Up to 1,200 compressed frames are
   held in memory for the active session and discarded when it disconnects.
+- **Replay seed** separates the proposal, semantic, and conditioning random
+  streams while deriving all three from one visible seed.
+- **Presets** provide useful starting configurations without hiding their
+  individual values.
 
 ### Experimental interventions
 
@@ -89,6 +95,12 @@ Each intervention can run alone or alongside the others:
 - **IP-Adapter memory** conditions SDXL-Turbo on the previous frame, a lagged or
   random history frame, or an exponential moving average of image embeddings.
   The adapter and its ViT-H image encoder load only when first enabled.
+  Its effective weight can remain constant, decay over time, pulse on and off,
+  or respond to measured semantic drift.
+- **Extended metrics** lazily enables LPIPS/AlexNet perceptual distance,
+  multiscale pixel distance, edge-map change, and CLIP semantic distance.
+  Metrics are observations only unless semantic-feedback IP modulation is
+  selected.
 
 Proposal noise, semantic direction, and conditioning selection use independent
 deterministic random streams derived from the walk seed. Toggling one technique
@@ -101,8 +113,23 @@ combination. Those failures are useful observations for this art project:
 lower noise strength or disable one intervention to return to a more
 interpretable region.
 
-The server includes measured pixel drift and, while CLIP is enabled, semantic
-drift and target similarity in each frame message.
+The server includes measured pixel drift, optional extended metrics, effective
+adapter weight, and CLIP target similarity in each frame message.
+
+### Replay and experiment export
+
+Every active session maintains a bounded, versioned experiment recorder. The
+browser can download:
+
+- A JSON replay manifest containing the walk seed, complete settings for every
+  retained step, metrics, effective parameters, and source-image hash.
+- A ZIP bundle containing that manifest, the processed source image, and every
+  retained JPEG frame.
+
+Importing a version-1 manifest restores its seed and replays each recorded
+configuration in order after the same source image is selected. The source
+image itself is not embedded in the JSON manifest; use the ZIP bundle when the
+source and generated frames need to travel together.
 
 The uploaded image is sent only to the server running on this machine.
 

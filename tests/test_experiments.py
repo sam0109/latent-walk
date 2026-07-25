@@ -7,6 +7,7 @@ from latent_walk.experiments import (
     FrequencySettings,
     WalkState,
 )
+from latent_walk.metrics import MetricSuite
 
 
 def state() -> WalkState:
@@ -51,6 +52,44 @@ def test_experiment_defaults_use_calibrated_safe_values() -> None:
 
     assert settings.clip.guidance == 0.005
     assert settings.ip_adapter.weight == 0.2
+
+
+def test_experiment_settings_round_trip_through_protocol() -> None:
+    original = ExperimentSettings.from_message(
+        {
+            "experiments": {
+                "ipAdapter": {
+                    "enabled": True,
+                    "modulation": "pulse",
+                    "pulsePeriod": 12,
+                    "pulseDuty": 0.25,
+                },
+                "metrics": {"enabled": True},
+            }
+        }
+    )
+
+    restored = ExperimentSettings.from_message(
+        {"experiments": original.to_message()}
+    )
+
+    assert restored == original
+
+
+def test_multiscale_and_edge_metrics_detect_visual_change(monkeypatch) -> None:
+    suite = MetricSuite("cpu")
+    monkeypatch.setattr(suite, "_lpips_distance", lambda before, after: 0.5)
+    black = Image.new("RGB", (64, 64), "black")
+    split = Image.new("RGB", (64, 64), "black")
+    for x in range(32, 64):
+        for y in range(64):
+            split.putpixel((x, y), (255, 255, 255))
+
+    metrics = suite.compute(black, split)
+
+    assert metrics["lpips"] == 0.5
+    assert metrics["pixelMultiscale"] > 0.45
+    assert metrics["edgeChange"] > 0
 
 
 def test_frequency_noise_preserves_unit_variance() -> None:

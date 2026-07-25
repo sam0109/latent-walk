@@ -28,10 +28,12 @@ from .model import (
     model_service,
     prepare_image,
 )
+from .recording import ExperimentRecorder
 
 STATIC_DIR = Path(__file__).parent / "static"
 LEASE_IDLE_SECONDS = 120
 MAX_SEQUENCE_FRAMES = 1200
+MAX_WALK_SEED = 2**63 - 1
 MAX_LOGIN_FAILURES = 8
 LOGIN_WINDOW_SECONDS = 5 * 60
 
@@ -205,6 +207,20 @@ async def walk_socket(websocket: WebSocket) -> None:
         if size not in VALID_SIZES:
             await send_error(websocket, "SDXL-Turbo runs at 512 × 512.")
             return
+        raw_seed = websocket.query_params.get("seed")
+        seed = None
+        if raw_seed is not None:
+            try:
+                seed = int(raw_seed)
+            except ValueError:
+                await send_error(websocket, "Seed must be an integer.")
+                return
+            if seed < 0 or seed > MAX_WALK_SEED:
+                await send_error(
+                    websocket,
+                    f"Seed must be between 0 and {MAX_WALK_SEED}.",
+                )
+                return
 
         await websocket.send_json(
             {"type": "status", "message": "Preparing the starting image…"}
@@ -216,11 +232,23 @@ async def walk_socket(websocket: WebSocket) -> None:
             await send_error(websocket, str(exc))
             return
 
-        walk = LatentWalk(pixels)
+        walk = LatentWalk(pixels, seed=seed)
         initial = await asyncio.to_thread(model_service.decode_jpeg, walk.image)
-        frames: deque[bytes] = deque([initial], maxlen=MAX_SEQUENCE_FRAMES)
+        recorder = ExperimentRecorder(
+            walk.seed,
+            initial,
+            size,
+            MAX_SEQUENCE_FRAMES,
+        )
         await websocket.send_json(
-            {"type": "ready", "step": 0, "distance": 0.0, "size": size}
+            {
+                "type": "ready",
+                "step": 0,
+                "distance": 0.0,
+                "size": size,
+                "seed": walk.seed,
+                "manifestVersion": 1,
+            }
         )
         await websocket.send_bytes(initial)
 
@@ -243,19 +271,54 @@ async def walk_socket(websocket: WebSocket) -> None:
                     continue
                 fps = min(max(fps, 1), 12)
                 await websocket.send_json(
-                    {"type": "status", "message": f"Encoding {len(frames)} frames at {fps} fps…"}
+                    {
+                        "type": "status",
+                        "message": f"Encoding {len(recorder.frames)} frames at {fps} fps…",
+                    }
                 )
-                video = await asyncio.to_thread(encode_mp4, list(frames), fps)
+                video = await asyncio.to_thread(
+                    encode_mp4,
+                    [frame.jpeg for frame in recorder.frames],
+                    fps,
+                )
                 await websocket.send_json(
                     {
                         "type": "video",
                         "filename": f"latent-walk-{fps}fps.mp4",
                         "contentType": "video/mp4",
-                        "frames": len(frames),
+                        "frames": len(recorder.frames),
                         "fps": fps,
                     }
                 )
                 await websocket.send_bytes(video)
+                continue
+            if message.get("type") == "exportManifest":
+                await websocket.send_json(
+                    {
+                        "type": "manifest",
+                        "filename": "latent-walk-manifest.json",
+                        "contentType": "application/json",
+                    }
+                )
+                await websocket.send_bytes(recorder.manifest_bytes())
+                continue
+            if message.get("type") == "exportBundle":
+                await websocket.send_json(
+                    {
+                        "type": "status",
+                        "message": f"Packing {len(recorder.frames)} frames and manifest…",
+                    }
+                )
+                bundle = await asyncio.to_thread(recorder.bundle_bytes)
+                await websocket.send_json(
+                    {
+                        "type": "bundle",
+                        "filename": "latent-walk-experiment.zip",
+                        "contentType": "application/zip",
+                        "frames": len(recorder.frames),
+                    }
+                )
+                await websocket.send_bytes(bundle)
                 continue
             if message.get("type") != "step":
                 await send_error(websocket, "Unknown control message.")
@@ -281,7 +344,7 @@ async def walk_socket(websocket: WebSocket) -> None:
             frame = await asyncio.to_thread(
                 model_service.decode_jpeg, result.image
             )
-            frames.append(frame)
+            recorder.record(settings, result, frame, walk.step_number)
             await websocket.send_json(
                 {
                     "type": "frame",
@@ -292,6 +355,7 @@ async def walk_socket(websocket: WebSocket) -> None:
                         if result.semantic_change is not None
                         else None
                     ),
+                    "metrics": result.metrics,
                     "effective": result.effective_parameters,
                 }
             )

@@ -65,6 +65,12 @@
             <button class="icon-button" id="videoButton" disabled aria-label="Download walk video" title="Download walk video">
               <svg viewBox="0 0 24 24"><path d="M4 5h16v14H4zM8 2v3m8-3v3M8 19v3m8-3v3M4 9h16M4 15h16"/></svg>
             </button>
+            <button class="icon-button" id="manifestButton" disabled aria-label="Download replay manifest" title="Download replay manifest">
+              <svg viewBox="0 0 24 24"><path d="M6 3h9l4 4v14H6zM14 3v5h5M9 13h6M9 17h6"/></svg>
+            </button>
+            <button class="icon-button" id="bundleButton" disabled aria-label="Download experiment bundle" title="Download frames and manifest">
+              <svg viewBox="0 0 24 24"><path d="M4 7h16v13H4zM8 7V4h8v3M12 11v6m0 0 3-3m-3 3-3-3"/></svg>
+            </button>
           </div>
         </div>
 
@@ -72,6 +78,23 @@
           <div class="control-heading">
             <span>WALK PARAMETERS</span>
             <button id="defaultsButton">RESET</button>
+          </div>
+          <label class="select-control">
+            <span><b>Preset</b><small>Starting points for exploration</small></span>
+            <select id="preset">
+              <option value="custom">Custom</option>
+              <option value="baseline" selected>Baseline drift</option>
+              <option value="composition">Slow composition</option>
+              <option value="semantic">Semantic meander</option>
+              <option value="memory">Memory dream</option>
+              <option value="turbulent">Turbulent synthesis</option>
+            </select>
+          </label>
+          <div class="seed-control">
+            <span><b>Replay seed</b><small>Same source + manifest reproduces a walk</small></span>
+            <div><input id="seed" type="number" min="0" max="9007199254740991" step="1" /><button id="randomSeedButton">RANDOMIZE</button></div>
+            <button class="manifest-import" id="importManifestButton">IMPORT REPLAY MANIFEST</button>
+            <input id="manifestInput" type="file" accept="application/json,.json" hidden />
           </div>
           <label class="control">
             <span><b>Noise strength</b><output id="noiseStrengthOutput">0.45</output></span>
@@ -131,8 +154,23 @@
               <label class="mini-select"><span>Memory source</span><select id="ipMemory"><option value="previous">Previous frame</option><option value="ema">Recent EMA</option><option value="lagged">Lagged frame</option><option value="random">Random history</option></select></label>
               <label class="mini-control"><span>Lag <output id="ipLagOutput">4</output></span><input id="ipLag" type="range" min="1" max="24" step="1" value="4" /></label>
               <label class="mini-control"><span>EMA decay <output id="ipDecayOutput">0.85</output></span><input id="ipDecay" type="range" min="0" max="0.99" step="0.01" value="0.85" /></label>
+              <label class="mini-select"><span>Weight modulation</span><select id="ipModulation"><option value="constant">Constant</option><option value="decay">Slow decay</option><option value="pulse">Pulsed memory</option><option value="feedback">Semantic feedback</option></select></label>
+              <label class="mini-control"><span>Decay rate <output id="ipModulationRateOutput">0.08</output></span><input id="ipModulationRate" type="range" min="0" max="1" step="0.01" value="0.08" /></label>
+              <label class="mini-control"><span>Pulse period <output id="ipPulsePeriodOutput">8</output></span><input id="ipPulsePeriod" type="range" min="2" max="64" step="1" value="8" /></label>
+              <label class="mini-control"><span>Pulse duty <output id="ipPulseDutyOutput">0.50</output></span><input id="ipPulseDuty" type="range" min="0.05" max="1" step="0.05" value="0.5" /></label>
+              <label class="mini-control"><span>Drift target <output id="ipFeedbackTargetOutput">0.080</output></span><input id="ipFeedbackTarget" type="range" min="0.001" max="0.5" step="0.005" value="0.08" /></label>
             </div>
           </details>
+          <label class="experiment-toggle">
+            <span><b>Extended metrics</b><small>LPIPS, multiscale pixels, edges, semantics</small></span>
+            <input id="metricsEnabled" type="checkbox" />
+          </label>
+          <div class="metric-readout" id="metricReadout" hidden>
+            <span>LPIPS <b id="lpipsValue">—</b></span>
+            <span>MULTI <b id="multiscaleValue">—</b></span>
+            <span>EDGE <b id="edgeValue">—</b></span>
+            <span>IP WEIGHT <b id="effectiveIpValue">—</b></span>
+          </div>
           <div class="status-line">
             <span class="status-dot" id="statusDot"></span>
             <span id="statusText">Waiting for an image</span>
