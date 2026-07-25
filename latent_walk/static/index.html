@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#0b0c10" />
+    <title>Latent Walk</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <div class="noise"></div>
+    <header>
+      <a class="brand" href="/" aria-label="Latent Walk home">
+        <span class="brand-mark"><i></i><i></i><i></i></span>
+        <span>LATENT / WALK</span>
+      </a>
+      <div class="model-pill"><span></span> SDXL-TURBO · RTX 4090</div>
+    </header>
+
+    <main>
+      <section class="intro">
+        <p class="eyebrow">A RANDOM WALK THROUGH MACHINE IMAGINATION</p>
+        <h1>Watch an image<br /><em>drift.</em></h1>
+        <p class="lede">Choose a starting frame. SDXL-Turbo repeatedly re-encodes, adds noise, and fully denoises it on an RTX 4090—an unanchored path through its learned image distribution.</p>
+      </section>
+
+      <section class="studio">
+        <div class="stage-wrap">
+          <div class="stage" id="dropzone">
+            <div class="empty-state" id="emptyState">
+              <div class="upload-glyph">
+                <svg viewBox="0 0 48 48" aria-hidden="true"><path d="M24 33V12m0 0-8 8m8-8 8 8M10 31v5a4 4 0 0 0 4 4h20a4 4 0 0 0 4-4v-5"/></svg>
+              </div>
+              <h2>Drop your starting point</h2>
+              <p>JPEG, PNG, or WebP · up to 12 MB</p>
+              <button class="text-button" id="chooseButton">Choose an image</button>
+            </div>
+            <img id="outputImage" alt="Current latent walk frame" hidden />
+            <div class="scanline"></div>
+            <div class="stage-hud" id="stageHud" hidden>
+              <span>STEP <b id="stepCount">0000</b></span>
+              <span>MOVE <b id="driftValue">0.000</b></span>
+            </div>
+            <div class="loading" id="loading" hidden>
+              <span class="spinner"></span>
+              <strong id="loadingText">Encoding starting point…</strong>
+              <small>The first denoised step loads SDXL-Turbo</small>
+            </div>
+          </div>
+          <input id="fileInput" type="file" accept="image/jpeg,image/png,image/webp" hidden />
+          <div class="stage-actions">
+            <button class="primary" id="walkButton" disabled>
+              <span class="play-icon"></span><span id="walkLabel">Begin walk</span>
+            </button>
+            <button class="icon-button" id="resetButton" disabled aria-label="Reset to starting image" title="Reset">
+              <svg viewBox="0 0 24 24"><path d="M4 4v6h6M5.4 15a7 7 0 1 0 .8-7.8L4 10"/></svg>
+            </button>
+            <button class="icon-button" id="downloadButton" disabled aria-label="Download current frame" title="Download current frame">
+              <svg viewBox="0 0 24 24"><path d="M12 3v12m0 0 5-5m-5 5-5-5M5 20h14"/></svg>
+            </button>
+          </div>
+        </div>
+
+        <aside class="controls">
+          <div class="control-heading">
+            <span>WALK PARAMETERS</span>
+            <button id="defaultsButton">RESET</button>
+          </div>
+          <label class="control">
+            <span><b>Noise strength</b><output id="noiseStrengthOutput">0.45</output></span>
+            <small>How radically each cycle can change</small>
+            <input id="noiseStrength" type="range" min="0.15" max="0.8" step="0.05" value="0.45" />
+          </label>
+          <label class="control">
+            <span><b>Denoising passes</b><output id="denoiseStepsOutput">2</output></span>
+            <small>Turbo projection steps per frame</small>
+            <input id="denoiseSteps" type="range" min="1" max="4" step="1" value="2" />
+          </label>
+          <label class="control">
+            <span><b>Playback</b><output id="fpsOutput">4 fps</output></span>
+            <small>Target rate; CPU speed sets the ceiling</small>
+            <input id="fps" type="range" min="1" max="4" step="1" value="4" />
+          </label>
+          <label class="select-control">
+            <span><b>Resolution</b><small>Higher is slower on CPU</small></span>
+            <select id="resolution">
+              <option value="512" selected>512 × 512 · Native</option>
+            </select>
+          </label>
+          <div class="status-line">
+            <span class="status-dot" id="statusDot"></span>
+            <span id="statusText">Waiting for an image</span>
+          </div>
+        </aside>
+      </section>
+
+      <section class="timeline" id="timeline" hidden>
+        <div class="timeline-heading"><span>RECENT STEPS</span><small>Newest first</small></div>
+        <div class="frames" id="frames"></div>
+      </section>
+    </main>
+
+    <footer><span>Inference runs on samdesktop</span><span>SDXL-TURBO · CUDA</span></footer>
+    <script src="/static/app.js" defer></script>
+  </body>
+</html>

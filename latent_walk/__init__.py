@@ -1,0 +1,2 @@
+"""Latent Walk application."""
+

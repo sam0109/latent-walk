@@ -1,0 +1,15 @@
+[Unit]
+Description=Latent Walk SDXL-Turbo web app
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/sam/latent-walk
+ExecStart=/home/sam/latent-walk/.venv/bin/uvicorn latent_walk.app:app --host 127.0.0.1 --port 8000
+Restart=on-failure
+RestartSec=3
+Environment=HF_HUB_DISABLE_PROGRESS_BARS=1
+
+[Install]
+WantedBy=default.target
