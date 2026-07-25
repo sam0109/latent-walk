@@ -6,6 +6,8 @@ inference on an RTX 4090. Every decoded frame is re-encoded before the next
 noise-and-denoise cycle, so approximate latent errors cannot accumulate
 unchecked. There is no origin anchor or maximum drift radius.
 
+Live deployment: <https://samdesktop.tail677e53.ts.net:10000/>
+
 ## How it works
 
 1. The browser uploads and center-crops a starting image to 512×512.
@@ -19,6 +21,10 @@ unchecked. There is no origin anchor or maximum drift radius.
 The request/response WebSocket protocol provides backpressure: the browser asks
 for another frame only after receiving the previous one.
 
+Only one WebSocket session can hold the GPU generation lease. Other visitors
+see an occupied-studio screen and retry automatically. An idle session releases
+the lease after two minutes.
+
 ## Run
 
 ```bash
@@ -30,10 +36,21 @@ uv run uvicorn latent_walk.app:app --host 127.0.0.1 --port 8000
 Open <http://127.0.0.1:8000>. The first walk step downloads and loads
 SDXL-Turbo; later runs use the local Hugging Face cache. A CUDA GPU is required.
 
-To expose it privately to your tailnet:
+Create a password hash without putting the plaintext password in a shell
+argument:
 
 ```bash
-tailscale serve --bg --https=10000 8000
+mkdir -p ~/.config/latent-walk
+uv run python -c \
+  'from argon2 import PasswordHasher; from getpass import getpass; print("LATENT_WALK_PASSWORD_HASH=" + PasswordHasher().hash(getpass()))' \
+  > ~/.config/latent-walk/env
+chmod 600 ~/.config/latent-walk/env
+```
+
+To expose it publicly through a password-gated Tailscale Funnel:
+
+```bash
+tailscale funnel --bg --https=10000 8000
 ```
 
 The repository includes `deploy/latent-walk.service` for running the app as a
@@ -48,5 +65,17 @@ persistent systemd user service.
 - **Playback** controls how quickly the browser requests frames. Actual speed is
   limited by denoising time.
 - **Resolution** trades CPU speed for output detail.
+- **Download video** records the displayed sequence in the browser and exports
+  MP4 when supported or WebM as a fallback. Frames are not retained by the
+  server.
 
 The uploaded image is sent only to the server running on this machine.
+
+## Security
+
+- Passwords are verified with Argon2; only the hash is stored outside Git.
+- Sessions use signed, expiring, `HttpOnly`, `Secure`, `SameSite=Strict`
+  cookies. The signing key is ephemeral and rotates on service restart.
+- Login failures are throttled per source address.
+- WebSockets require authentication and reject cross-origin browser requests.
+- Content Security Policy and standard browser security headers are applied.

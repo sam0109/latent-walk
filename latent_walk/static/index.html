@@ -47,8 +47,9 @@
             <div class="loading" id="loading" hidden>
               <span class="spinner"></span>
               <strong id="loadingText">Encoding starting point…</strong>
-              <small>The first denoised step loads SDXL-Turbo</small>
+              <small id="loadingHint">The first denoised step loads SDXL-Turbo</small>
             </div>
+            <canvas id="recordingCanvas" width="512" height="512" hidden></canvas>
           </div>
           <input id="fileInput" type="file" accept="image/jpeg,image/png,image/webp" hidden />
           <div class="stage-actions">
@@ -60,6 +61,9 @@
             </button>
             <button class="icon-button" id="downloadButton" disabled aria-label="Download current frame" title="Download current frame">
               <svg viewBox="0 0 24 24"><path d="M12 3v12m0 0 5-5m-5 5-5-5M5 20h14"/></svg>
+            </button>
+            <button class="icon-button" id="videoButton" disabled aria-label="Download walk video" title="Download walk video">
+              <svg viewBox="0 0 24 24"><path d="M4 5h16v14H4zM8 2v3m8-3v3M8 19v3m8-3v3M4 9h16M4 15h16"/></svg>
             </button>
           </div>
         </div>

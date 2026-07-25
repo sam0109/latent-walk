@@ -10,6 +10,7 @@ ExecStart=/home/sam/latent-walk/.venv/bin/uvicorn latent_walk.app:app --host 127
 Restart=on-failure
 RestartSec=3
 Environment=HF_HUB_DISABLE_PROGRESS_BARS=1
+EnvironmentFile=/home/sam/.config/latent-walk/env
 
 [Install]
 WantedBy=default.target

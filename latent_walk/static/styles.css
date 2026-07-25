@@ -121,6 +121,21 @@ select { appearance: none; background: #0e0f13 url("data:image/svg+xml,%3Csvg xm
 
 footer { border-top: 1px solid var(--line); color: #5f6065; display: flex; font: 9px DM Mono, monospace; justify-content: space-between; letter-spacing: .08em; padding: 20px 0 30px; text-transform: uppercase; }
 
+.login-page { min-height: 100vh; }
+.login-shell { display: flex; flex-direction: column; min-height: 100vh; padding: 0; }
+.login-brand { align-items: center; border-bottom: 1px solid var(--line); display: flex; font: 500 12px DM Mono, monospace; height: 80px; letter-spacing: .12em; }
+.login-card { margin: auto 0; max-width: 780px; padding: 80px 0; }
+.login-card h1 { font-size: clamp(64px, 10vw, 124px); margin: 26px 0 36px; }
+.login-card > p:not(.eyebrow) { color: #a7a6a1; line-height: 1.7; max-width: 420px; }
+.login-card form { margin-top: 48px; max-width: 560px; }
+.login-card label { color: var(--muted); display: block; font: 9px DM Mono, monospace; letter-spacing: .1em; margin-bottom: 10px; }
+.password-row { display: flex; }
+.password-row input { background: var(--surface); border: 1px solid var(--line); border-right: 0; color: var(--ink); flex: 1; min-width: 0; outline: none; padding: 16px; }
+.password-row input:focus { border-color: var(--violet); }
+.password-row button { background: var(--acid); border: 1px solid var(--acid); color: #11130b; cursor: pointer; font-size: 11px; font-weight: 700; min-width: 110px; padding: 0 18px; }
+.password-row button:disabled { opacity: .5; }
+.login-error { color: var(--orange); font: 10px DM Mono, monospace; min-height: 18px; padding-top: 12px; }
+
 @media (max-width: 900px) {
   .intro { display: block; }
   .lede { margin: 32px 0 0; }
@@ -142,4 +157,8 @@ footer { border-top: 1px solid var(--line); color: #5f6065; display: flex; font:
   .control:nth-of-type(odd) { border-left: 0; }
   .frames { grid-template-columns: repeat(3, 1fr); }
   footer { gap: 10px; }
+  .login-shell { width: calc(100% - 36px); }
+  .login-brand { height: 66px; }
+  .login-card { padding: 56px 0; }
+  .login-card h1 { font-size: 62px; }
 }

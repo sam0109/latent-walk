@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#0b0c10" />
+    <title>Enter · Latent Walk</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Manrope:wght@400;500;600&display=swap" rel="stylesheet" />
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body class="login-page">
+    <div class="noise"></div>
+    <main class="login-shell">
+      <div class="login-brand">
+        <span class="brand-mark"><i></i><i></i><i></i></span>
+        <span>LATENT / WALK</span>
+      </div>
+      <section class="login-card">
+        <p class="eyebrow">PRIVATE GENERATIVE STUDIO</p>
+        <h1>Enter the<br /><em>drift.</em></h1>
+        <p>This GPU is shared. One visitor can generate at a time.</p>
+        <form id="loginForm">
+          <label for="password">ACCESS PASSWORD</label>
+          <div class="password-row">
+            <input id="password" name="password" type="password" autocomplete="current-password" required autofocus />
+            <button type="submit">ENTER</button>
+          </div>
+          <div class="login-error" id="loginError" role="alert"></div>
+        </form>
+      </section>
+      <footer><span>SDXL-TURBO · RTX 4090</span><span>ONE WALK AT A TIME</span></footer>
+    </main>
+    <script src="/static/login.js" defer></script>
+  </body>
+</html>
+
