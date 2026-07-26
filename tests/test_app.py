@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 from PIL import Image
 
 from latent_walk.app import app
-from latent_walk.auth import COOKIE_NAME, issue_session, verify_session
+from latent_walk.auth import COOKIE_NAME, _session_secret, issue_session, verify_session
 from latent_walk.experiments import StepResult
 from latent_walk.model import model_service
 
@@ -43,6 +43,18 @@ def test_health_is_public() -> None:
 
 def test_issued_sessions_always_verify() -> None:
     assert all(verify_session(issue_session()) for _ in range(1000))
+
+
+def test_session_survives_secret_reload(monkeypatch) -> None:
+    monkeypatch.delenv("LATENT_WALK_SESSION_SECRET")
+    monkeypatch.setenv("LATENT_WALK_PASSWORD_HASH", "durable-test-password-hash")
+    _session_secret.cache_clear()
+    token = issue_session()
+    _session_secret.cache_clear()
+    try:
+        assert verify_session(token)
+    finally:
+        _session_secret.cache_clear()
 
 
 def test_websocket_rejects_non_native_resolution(monkeypatch) -> None:

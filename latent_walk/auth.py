@@ -5,7 +5,6 @@ import hashlib
 import hmac
 import os
 import secrets
-import subprocess
 import time
 from functools import lru_cache
 
@@ -16,8 +15,6 @@ COOKIE_NAME = "latent_walk_session"
 SESSION_SECONDS = 30 * 24 * 60 * 60
 PASSWORD_HASH_ENV = "LATENT_WALK_PASSWORD_HASH"
 SESSION_SECRET_ENV = "LATENT_WALK_SESSION_SECRET"
-KEYRING_SERVICE = "latent-walk"
-KEYRING_CREDENTIAL = "session-signing"
 
 _password_hasher = PasswordHasher()
 
@@ -28,23 +25,14 @@ def _session_secret() -> bytes:
     if configured:
         secret = configured.encode()
     else:
-        try:
-            result = subprocess.run(
-                [
-                    "secret-tool",
-                    "lookup",
-                    "service",
-                    KEYRING_SERVICE,
-                    "credential",
-                    KEYRING_CREDENTIAL,
-                ],
-                check=False,
-                capture_output=True,
-                timeout=5,
-            )
-        except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
-            raise RuntimeError("Session signing key is unavailable") from exc
-        secret = result.stdout.strip()
+        password_hash = os.environ.get(PASSWORD_HASH_ENV)
+        if not password_hash:
+            raise RuntimeError("Session signing key is unavailable")
+        secret = hmac.new(
+            password_hash.encode(),
+            b"latent-walk/session-signing/v1",
+            hashlib.sha256,
+        ).digest()
     if len(secret) < 32:
         raise RuntimeError("Session signing key is unavailable")
     return secret

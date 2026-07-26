@@ -51,15 +51,9 @@ uv run python -c \
 chmod 600 ~/.config/latent-walk/env
 ```
 
-Store the persistent session-signing key in the unlocked system keyring:
-
-```bash
-openssl rand -base64 48 | secret-tool store \
-  --label="Latent Walk session signing key" \
-  service latent-walk credential session-signing
-```
-
-Login cookies remain valid for 30 days, including across service restarts.
+Login cookies are signed from the durable authentication configuration and
+remain valid for 30 days, including across service restarts. Rotating the
+password invalidates existing sessions.
 
 To expose it publicly through a password-gated Tailscale Funnel:
 
