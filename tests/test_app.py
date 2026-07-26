@@ -2,6 +2,7 @@ import io
 import json
 import zipfile
 
+import pytest
 from argon2 import PasswordHasher
 from fastapi.testclient import TestClient
 from PIL import Image
@@ -10,6 +11,11 @@ from latent_walk.app import app
 from latent_walk.auth import COOKIE_NAME, issue_session, verify_session
 from latent_walk.experiments import StepResult
 from latent_walk.model import model_service
+
+
+@pytest.fixture(autouse=True)
+def session_signing_key(monkeypatch) -> None:
+    monkeypatch.setenv("LATENT_WALK_SESSION_SECRET", "test-session-secret-" * 3)
 
 
 def test_login_protects_app(monkeypatch) -> None:
@@ -26,6 +32,7 @@ def test_login_protects_app(monkeypatch) -> None:
     assert "HttpOnly" in login.headers["set-cookie"]
     assert "Secure" in login.headers["set-cookie"]
     assert "SameSite=strict" in login.headers["set-cookie"]
+    assert "Max-Age=2592000" in login.headers["set-cookie"]
     assert client.get("/").status_code == 200
 
 

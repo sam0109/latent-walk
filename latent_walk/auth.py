@@ -5,17 +5,49 @@ import hashlib
 import hmac
 import os
 import secrets
+import subprocess
 import time
+from functools import lru_cache
 
 from argon2 import PasswordHasher
 from argon2.exceptions import VerificationError
 
 COOKIE_NAME = "latent_walk_session"
-SESSION_SECONDS = 12 * 60 * 60
+SESSION_SECONDS = 30 * 24 * 60 * 60
 PASSWORD_HASH_ENV = "LATENT_WALK_PASSWORD_HASH"
+SESSION_SECRET_ENV = "LATENT_WALK_SESSION_SECRET"
+KEYRING_SERVICE = "latent-walk"
+KEYRING_CREDENTIAL = "session-signing"
 
 _password_hasher = PasswordHasher()
-_session_secret = secrets.token_bytes(32)
+
+
+@lru_cache(maxsize=1)
+def _session_secret() -> bytes:
+    configured = os.environ.get(SESSION_SECRET_ENV)
+    if configured:
+        secret = configured.encode()
+    else:
+        try:
+            result = subprocess.run(
+                [
+                    "secret-tool",
+                    "lookup",
+                    "service",
+                    KEYRING_SERVICE,
+                    "credential",
+                    KEYRING_CREDENTIAL,
+                ],
+                check=False,
+                capture_output=True,
+                timeout=5,
+            )
+        except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
+            raise RuntimeError("Session signing key is unavailable") from exc
+        secret = result.stdout.strip()
+    if len(secret) < 32:
+        raise RuntimeError("Session signing key is unavailable")
+    return secret
 
 
 def verify_password(password: str) -> bool:
@@ -31,7 +63,7 @@ def verify_password(password: str) -> bool:
 def issue_session() -> str:
     expires = int(time.time()) + SESSION_SECONDS
     payload = f"{expires}.{secrets.token_urlsafe(18)}".encode()
-    signature = hmac.new(_session_secret, payload, hashlib.sha256).digest()
+    signature = hmac.new(_session_secret(), payload, hashlib.sha256).digest()
     return base64.urlsafe_b64encode(payload + signature).decode()
 
 
@@ -41,8 +73,8 @@ def verify_session(token: str | None) -> bool:
     try:
         decoded = base64.urlsafe_b64decode(token.encode())
         payload, signature = decoded[:-32], decoded[-32:]
-        expected = hmac.new(_session_secret, payload, hashlib.sha256).digest()
+        expected = hmac.new(_session_secret(), payload, hashlib.sha256).digest()
         expires = int(payload.split(b".", 1)[0])
-    except (ValueError, TypeError):
+    except (RuntimeError, ValueError, TypeError):
         return False
     return hmac.compare_digest(signature, expected) and expires >= int(time.time())

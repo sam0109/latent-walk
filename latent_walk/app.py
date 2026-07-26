@@ -128,15 +128,21 @@ async def login(submission: LoginSubmission, request: Request) -> Response:
 
     login_failures.pop(key, None)
     response = JSONResponse({"ok": True})
-    response.set_cookie(
-        COOKIE_NAME,
-        issue_session(),
-        max_age=SESSION_SECONDS,
-        httponly=True,
-        secure=True,
-        samesite="strict",
-        path="/",
-    )
+    try:
+        response.set_cookie(
+            COOKIE_NAME,
+            issue_session(),
+            max_age=SESSION_SECONDS,
+            httponly=True,
+            secure=True,
+            samesite="strict",
+            path="/",
+        )
+    except RuntimeError:
+        return JSONResponse(
+            {"detail": "Persistent login is not configured."},
+            status_code=503,
+        )
     return response
 
 

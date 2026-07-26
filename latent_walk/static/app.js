@@ -9,6 +9,7 @@ const elements = {
   walk: $("#walkButton"),
   walkLabel: $("#walkLabel"),
   reset: $("#resetButton"),
+  replace: $("#replaceButton"),
   download: $("#downloadButton"),
   video: $("#videoButton"),
   manifest: $("#manifestButton"),
@@ -82,6 +83,8 @@ let replaySteps = [];
 let replayActive = false;
 let applyingSettings = false;
 const historyUrls = [];
+const SETTINGS_STORAGE_KEY = "latent-walk.settings.v1";
+const SETTINGS_STORAGE_VERSION = 1;
 
 const controls = [
   [elements.noiseStrength, $("#noiseStrengthOutput"), (value) => Number(value).toFixed(2)],
@@ -168,17 +171,80 @@ function currentSettings() {
   };
 }
 
+function saveBrowserSettings() {
+  if (applyingSettings) return;
+  const state = {
+    version: SETTINGS_STORAGE_VERSION,
+    settings: currentSettings(),
+    fps: Number(elements.fps.value),
+    resolution: Number(elements.resolution.value),
+    preset: elements.preset.value,
+    seed: Number(elements.seed.value),
+  };
+  try {
+    localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(state));
+  } catch (error) {
+    console.warn("Could not save Latent Walk settings", error);
+  }
+}
+
+function restoreBrowserSettings() {
+  let raw;
+  try {
+    raw = localStorage.getItem(SETTINGS_STORAGE_KEY);
+    if (!raw) return;
+    const state = JSON.parse(raw);
+    if (
+      state?.version !== SETTINGS_STORAGE_VERSION
+      || typeof state.settings !== "object"
+      || state.settings === null
+    ) {
+      throw new Error("Unsupported saved settings");
+    }
+    applyingSettings = true;
+    applySettings(state.settings);
+    setControl(elements.fps, state.fps);
+    const resolutions = [...elements.resolution.options].map((option) => option.value);
+    if (resolutions.includes(String(state.resolution))) {
+      setControl(elements.resolution, state.resolution);
+    }
+    if (Object.hasOwn(presets, state.preset) || state.preset === "custom") {
+      setControl(elements.preset, state.preset);
+    }
+    if (Number.isSafeInteger(state.seed) && state.seed >= 0) {
+      setControl(elements.seed, state.seed);
+    }
+  } catch (error) {
+    console.warn("Discarding invalid Latent Walk settings", error);
+    try {
+      localStorage.removeItem(SETTINGS_STORAGE_KEY);
+    } catch (storageError) {
+      console.warn("Could not clear invalid Latent Walk settings", storageError);
+    }
+  } finally {
+    applyingSettings = false;
+  }
+}
+
 function setControl(input, value) {
   if (value == null) return;
   if (input.type === "checkbox") {
     input.checked = Boolean(value);
+  } else if (input.tagName === "SELECT") {
+    const available = [...input.options].some((option) => option.value === String(value));
+    if (available) input.value = String(value);
   } else {
-    input.value = String(value);
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) return;
+    const minimum = input.min === "" ? numeric : Number(input.min);
+    const maximum = input.max === "" ? numeric : Number(input.max);
+    input.value = String(Math.min(maximum, Math.max(minimum, numeric)));
     input.dispatchEvent(new Event("input"));
   }
 }
 
 function applySettings(settings) {
+  const wasApplyingSettings = applyingSettings;
   applyingSettings = true;
   const experiments = settings?.experiments ?? {};
   const frequency = experiments.frequency ?? {};
@@ -210,7 +276,7 @@ function applySettings(settings) {
   setControl(elements.ipPulseDuty, ip.pulseDuty);
   setControl(elements.ipFeedbackTarget, ip.feedbackTarget);
   setControl(elements.metricsEnabled, experiments.metrics?.enabled);
-  applyingSettings = false;
+  applyingSettings = wasApplyingSettings;
 }
 
 const presets = {
@@ -259,6 +325,7 @@ for (const control of [
     elements.preset.value = "custom";
     replayActive = false;
     replaySteps = [];
+    saveBrowserSettings();
   });
 }
 
@@ -526,6 +593,7 @@ async function connectAndEncode() {
 
     if (meta.type === "ready") {
       elements.seed.value = String(meta.seed);
+      saveBrowserSettings();
       setStatus("Ready to begin", "ready");
       elements.walkLabel.textContent = "Begin walk";
     } else if (walking) {
@@ -563,6 +631,7 @@ function selectFile(file) {
     return;
   }
   sourceFile = file;
+  elements.replace.disabled = false;
   connectAndEncode();
 }
 
@@ -598,15 +667,25 @@ async function importManifest(file) {
   replayActive = true;
   elements.preset.value = "custom";
   if (replaySteps[0]) applySettings(replaySteps[0].settings);
+  saveBrowserSettings();
   setStatus(`Loaded ${replaySteps.length}-step replay`, "ready");
   if (sourceFile) connectAndEncode();
 }
 
-elements.choose.addEventListener("click", () => elements.input.click());
+function openImagePicker() {
+  elements.input.value = "";
+  elements.input.click();
+}
+
+elements.choose.addEventListener("click", openImagePicker);
+elements.replace.addEventListener("click", openImagePicker);
 elements.input.addEventListener("change", () => selectFile(elements.input.files[0]));
 elements.walk.addEventListener("click", toggleWalk);
 elements.reset.addEventListener("click", connectAndEncode);
-elements.resolution.addEventListener("change", () => sourceFile && connectAndEncode());
+elements.resolution.addEventListener("change", () => {
+  saveBrowserSettings();
+  if (sourceFile) connectAndEncode();
+});
 elements.download.addEventListener("click", () => {
   if (!currentUrl) return;
   const link = document.createElement("a");
@@ -632,12 +711,15 @@ elements.randomSeed.addEventListener("click", () => {
   elements.seed.value = String(newSeed());
   replayActive = false;
   replaySteps = [];
+  saveBrowserSettings();
   if (sourceFile) connectAndEncode();
 });
+elements.seed.addEventListener("change", saveBrowserSettings);
 elements.preset.addEventListener("change", () => {
   if (elements.preset.value !== "custom") applyPreset(elements.preset.value);
   replayActive = false;
   replaySteps = [];
+  saveBrowserSettings();
 });
 
 elements.defaults.addEventListener("click", () => {
@@ -659,7 +741,10 @@ elements.defaults.addEventListener("click", () => {
   elements.preset.value = "baseline";
   replayActive = false;
   replaySteps = [];
+  saveBrowserSettings();
 });
+
+restoreBrowserSettings();
 
 for (const eventName of ["dragenter", "dragover"]) {
   elements.dropzone.addEventListener(eventName, (event) => {

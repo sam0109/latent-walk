@@ -51,6 +51,16 @@ uv run python -c \
 chmod 600 ~/.config/latent-walk/env
 ```
 
+Store the persistent session-signing key in the unlocked system keyring:
+
+```bash
+openssl rand -base64 48 | secret-tool store \
+  --label="Latent Walk session signing key" \
+  service latent-walk credential session-signing
+```
+
+Login cookies remain valid for 30 days, including across service restarts.
+
 To expose it publicly through a password-gated Tailscale Funnel:
 
 ```bash
@@ -77,6 +87,10 @@ persistent systemd user service.
   streams while deriving all three from one visible seed.
 - **Presets** provide useful starting configurations without hiding their
   individual values.
+- Control values, the selected preset, playback speed, and replay seed are
+  restored from browser-local storage after a refresh.
+- **Replace image** starts a fresh walk from another source without reloading
+  the page.
 
 ### Experimental interventions
 
