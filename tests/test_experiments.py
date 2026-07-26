@@ -1,3 +1,5 @@
+import math
+
 import torch
 from PIL import Image
 
@@ -6,6 +8,7 @@ from latent_walk.experiments import (
     FrequencyNoiseStrategy,
     FrequencySettings,
     WalkState,
+    semantic_stagnation,
 )
 from latent_walk.metrics import MetricSuite
 
@@ -26,6 +29,11 @@ def test_experiment_settings_parse_and_bound_values() -> None:
                     "persistence": 2,
                 },
                 "clip": {"enabled": True, "semanticStep": 0.12},
+                "escape": {
+                    "enabled": True,
+                    "strength": 2,
+                    "sensitivity": 3,
+                },
                 "ipAdapter": {
                     "enabled": True,
                     "weight": 0.7,
@@ -42,6 +50,9 @@ def test_experiment_settings_parse_and_bound_values() -> None:
     assert settings.frequency.high == 0
     assert settings.frequency.persistence == 0.98
     assert settings.clip.semantic_step == 0.12
+    assert settings.escape.enabled
+    assert settings.escape.strength == 0.55
+    assert settings.escape.sensitivity == 1.5
     assert settings.ip_adapter.memory == "lagged"
     assert settings.ip_adapter.lag == 8
     assert settings.ip_adapter.decay == 0.7
@@ -51,6 +62,8 @@ def test_experiment_defaults_use_calibrated_safe_values() -> None:
     settings = ExperimentSettings.from_message({})
 
     assert settings.clip.guidance == 0.005
+    assert settings.escape.strength == 0.55
+    assert settings.escape.sensitivity == 1.2
     assert settings.ip_adapter.weight == 0.2
 
 
@@ -161,3 +174,26 @@ def test_frequency_persistence_correlates_steps() -> None:
     )[0, 1]
 
     assert correlation > 0.85
+
+
+def test_semantic_stagnation_distinguishes_circling_from_progress() -> None:
+    circling = []
+    progressing = []
+    for index in range(24):
+        circle_angle = 0.03 * math.sin(index * math.pi / 2)
+        progress_angle = index * 2 / 23
+        circling.append(
+            torch.tensor([[math.cos(circle_angle), math.sin(circle_angle), 0.0]])
+        )
+        progressing.append(
+            torch.tensor([[math.cos(progress_angle), math.sin(progress_angle), 0.0]])
+        )
+
+    stuck = semantic_stagnation(circling, sensitivity=1.0)
+    moving = semantic_stagnation(progressing, sensitivity=1.0)
+
+    assert stuck.stuck
+    assert stuck.radius < 0.22
+    assert stuck.progress_ratio < 0.13
+    assert stuck.revisit_similarity > 0.94
+    assert not moving.stuck

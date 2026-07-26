@@ -43,6 +43,7 @@
               <span>STEP <b id="stepCount">0000</b></span>
               <span>MOVE <b id="driftValue">0.000</b></span>
               <span id="semanticHud" hidden>SEM <b id="semanticValue">0.000</b></span>
+              <span id="escapeHud" hidden>ESCAPE</span>
             </div>
             <div class="loading" id="loading" hidden>
               <span class="spinner"></span>
@@ -141,6 +142,16 @@
               <label class="mini-control"><span>Semantic step <output id="clipStepOutput">0.080</output></span><input id="clipStep" type="range" min="0.005" max="0.3" step="0.005" value="0.08" /></label>
               <label class="mini-control"><span>Momentum <output id="clipMomentumOutput">0.85</output></span><input id="clipMomentum" type="range" min="0" max="0.98" step="0.01" value="0.85" /></label>
               <label class="mini-control"><span>Guidance <output id="clipGuidanceOutput">0.005</output></span><input id="clipGuidance" type="range" min="0" max="0.025" step="0.0025" value="0.005" /></label>
+            </div>
+          </details>
+          <details class="experiment">
+            <summary>
+              <span><b>Semantic escape</b><small>Detect and repel semantic attractors</small></span>
+              <input id="escapeEnabled" type="checkbox" aria-label="Enable semantic escape" />
+            </summary>
+            <div class="experiment-body">
+              <label class="mini-select"><span>Reset depth</span><select id="escapeStrength"><option value="0.35">Deep · preserve composition</option><option value="0.55" selected>Full · leave the basin</option></select></label>
+              <label class="mini-control"><span>Sensitivity <output id="escapeSensitivityOutput">1.20</output></span><input id="escapeSensitivity" type="range" min="0.5" max="1.5" step="0.05" value="1.2" /></label>
             </div>
           </details>
           <details class="experiment">

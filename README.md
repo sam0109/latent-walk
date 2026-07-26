@@ -93,6 +93,15 @@ Each intervention can run alone or alongside the others:
   spatially low-pass filtered and bounded; the final scheduler step is never
   modified because it has no later denoiser pass to project it back onto the
   image manifold.
+- **Semantic escape** watches a rolling CLIP trajectory for the combination
+  measured in attractor runs: a small semantic radius, low net progress
+  relative to path length, and high similarity to older frames. When all three
+  trigger, it generates four deep or full-reset candidates and keeps the one
+  least similar to the recent embedding centroid before entering a cooldown.
+  Full reset deliberately discards the stuck composition for that proposal.
+  Escape proposals temporarily supersede the other interventions, and a
+  triggered frame costs four ordinary proposals. The intervention is disabled
+  by default.
 - **IP-Adapter memory** conditions SDXL-Turbo on the previous frame, a lagged or
   random history frame, or an exponential moving average of image embeddings.
   The adapter and its ViT-H image encoder load only when first enabled.
@@ -115,7 +124,8 @@ lower noise strength or disable one intervention to return to a more
 interpretable region.
 
 The server includes measured pixel drift, optional extended metrics, effective
-adapter weight, and CLIP target similarity in each frame message.
+adapter weight, CLIP target similarity, stagnation measurements, and semantic
+escape activity in each frame message.
 
 ### Replay and experiment export
 

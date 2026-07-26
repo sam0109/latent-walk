@@ -21,6 +21,7 @@ const elements = {
   drift: $("#driftValue"),
   semanticHud: $("#semanticHud"),
   semantic: $("#semanticValue"),
+  escapeHud: $("#escapeHud"),
   status: $("#statusText"),
   statusDot: $("#statusDot"),
   timeline: $("#timeline"),
@@ -44,6 +45,9 @@ const elements = {
   clipStep: $("#clipStep"),
   clipMomentum: $("#clipMomentum"),
   clipGuidance: $("#clipGuidance"),
+  escapeEnabled: $("#escapeEnabled"),
+  escapeStrength: $("#escapeStrength"),
+  escapeSensitivity: $("#escapeSensitivity"),
   ipEnabled: $("#ipEnabled"),
   ipWeight: $("#ipWeight"),
   ipMemory: $("#ipMemory"),
@@ -89,6 +93,7 @@ const controls = [
   [elements.clipStep, $("#clipStepOutput"), (value) => Number(value).toFixed(3)],
   [elements.clipMomentum, $("#clipMomentumOutput"), (value) => Number(value).toFixed(2)],
   [elements.clipGuidance, $("#clipGuidanceOutput"), (value) => Number(value).toFixed(3)],
+  [elements.escapeSensitivity, $("#escapeSensitivityOutput"), (value) => Number(value).toFixed(2)],
   [elements.ipWeight, $("#ipWeightOutput"), (value) => Number(value).toFixed(2)],
   [elements.ipLag, $("#ipLagOutput"), (value) => value],
   [elements.ipDecay, $("#ipDecayOutput"), (value) => Number(value).toFixed(2)],
@@ -104,6 +109,8 @@ for (const [input, output, format] of controls) {
 for (const checkbox of [
   elements.frequencyEnabled,
   elements.clipEnabled,
+  elements.escapeEnabled,
+  elements.escapeStrength,
   elements.ipEnabled,
 ]) {
   checkbox.addEventListener("click", (event) => event.stopPropagation());
@@ -134,6 +141,11 @@ function currentSettings() {
         semanticStep: Number(elements.clipStep.value),
         momentum: Number(elements.clipMomentum.value),
         guidance: Number(elements.clipGuidance.value),
+      },
+      escape: {
+        enabled: elements.escapeEnabled.checked,
+        strength: Number(elements.escapeStrength.value),
+        sensitivity: Number(elements.escapeSensitivity.value),
       },
       ipAdapter: {
         enabled: elements.ipEnabled.checked,
@@ -169,6 +181,7 @@ function applySettings(settings) {
   const experiments = settings?.experiments ?? {};
   const frequency = experiments.frequency ?? {};
   const clip = experiments.clip ?? {};
+  const escape = experiments.escape ?? {};
   const ip = experiments.ipAdapter ?? {};
   setControl(elements.noiseStrength, settings?.noiseStrength);
   setControl(elements.denoiseSteps, settings?.denoiseSteps);
@@ -181,6 +194,9 @@ function applySettings(settings) {
   setControl(elements.clipStep, clip.semanticStep);
   setControl(elements.clipMomentum, clip.momentum);
   setControl(elements.clipGuidance, clip.guidance);
+  setControl(elements.escapeEnabled, escape.enabled);
+  setControl(elements.escapeStrength, escape.strength);
+  setControl(elements.escapeSensitivity, escape.sensitivity);
   setControl(elements.ipEnabled, ip.enabled);
   setControl(elements.ipWeight, ip.weight);
   setControl(elements.ipMemory, ip.memory);
@@ -217,6 +233,7 @@ function applyPreset(name) {
   const base = currentSettings();
   base.experiments.frequency.enabled = false;
   base.experiments.clip.enabled = false;
+  base.experiments.escape.enabled = false;
   base.experiments.ipAdapter.enabled = false;
   const preset = presets[name] ?? {};
   for (const [section, values] of Object.entries(preset)) {
@@ -229,6 +246,8 @@ for (const control of [
   ...controls.map(([input]) => input),
   elements.frequencyEnabled,
   elements.clipEnabled,
+  elements.escapeEnabled,
+  elements.escapeStrength,
   elements.ipEnabled,
   elements.ipMemory,
   elements.ipModulation,
@@ -310,6 +329,7 @@ async function replaceImage(blob, meta, addToHistory = true) {
   if (meta.semanticChange != null) {
     elements.semantic.textContent = Number(meta.semanticChange).toFixed(3);
   }
+  elements.escapeHud.hidden = meta.effective?.escapeActive !== true;
   const metrics = meta.metrics ?? {};
   elements.metricReadout.hidden = Object.keys(metrics).length <= 1;
   elements.lpips.textContent = metrics.lpips == null ? "—" : Number(metrics.lpips).toFixed(3);
@@ -613,7 +633,7 @@ elements.preset.addEventListener("change", () => {
 elements.defaults.addEventListener("click", () => {
   const defaults = [
     "0.45", "2", "4", "1", "1", "1", "0.5", "0.08", "0.85",
-    "0.005", "0.2", "4", "0.85", "0.08", "8", "0.5", "0.08",
+    "0.005", "1.2", "0.2", "4", "0.85", "0.08", "8", "0.5", "0.08",
   ];
   controls.forEach(([input], index) => {
     input.value = defaults[index];
@@ -621,6 +641,8 @@ elements.defaults.addEventListener("click", () => {
   });
   elements.frequencyEnabled.checked = false;
   elements.clipEnabled.checked = false;
+  elements.escapeEnabled.checked = false;
+  elements.escapeStrength.value = "0.55";
   elements.ipEnabled.checked = false;
   elements.ipMemory.value = "previous";
   elements.ipModulation.value = "constant";

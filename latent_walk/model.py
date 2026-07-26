@@ -21,9 +21,11 @@ from latent_walk.experiments import (
     ExperimentSettings,
     FrequencyNoiseStrategy,
     IpAdapterSettings,
+    StagnationResult,
     StepResult,
     WalkState,
     gaussian_blur,
+    semantic_stagnation,
 )
 from latent_walk.metrics import MetricSuite, image_tensor
 
@@ -221,7 +223,10 @@ class ModelService:
     def loading_message(self, settings: WalkSettings) -> str | None:
         if not self.loaded:
             return "Loading SDXL-Turbo on the RTX 4090…"
-        if settings.experiments.clip.enabled and self._clip_encoder is None:
+        if (
+            self._tracks_semantics(settings.experiments)
+            and self._clip_encoder is None
+        ):
             return "Loading the CLIP semantic encoder…"
         if settings.experiments.ip_adapter.enabled and not self._ip_adapter_loaded:
             return "Loading the IP-Adapter image encoder…"
@@ -271,34 +276,50 @@ class ModelService:
                 walk.conditioning_generator = torch.Generator(
                     device="cuda"
                 ).manual_seed(walk.seed ^ 0x49504144)
+                walk.escape_generator = torch.Generator(
+                    device="cuda"
+                ).manual_seed(walk.seed ^ 0x45534350)
 
             ip_kwargs, effective_ip_weight = self._prepare_ip_adapter(
                 walk,
                 settings.experiments,
             )
-            callback, clip_target = self._prepare_clip_guidance(
-                walk,
-                settings.experiments,
+            callback, clip_target, escape_active, stagnation = (
+                self._prepare_clip_guidance(
+                    walk,
+                    settings.experiments,
+                )
             )
-            custom_latents = self._prepare_custom_latents(
-                walk,
-                settings,
-                total_steps,
-            )
-            with torch.no_grad():
-                result = pipeline(
-                    prompt="",
-                    image=walk.image,
-                    strength=settings.noise_strength,
-                    num_inference_steps=total_steps,
-                    guidance_scale=0.0,
-                    generator=walk.generator,
-                    latents=custom_latents,
-                    callback_on_step_end=callback,
-                    callback_on_step_end_tensor_inputs=["latents"],
-                    output_type="pil",
-                    **ip_kwargs,
-                ).images[0]
+            if escape_active:
+                result, escape_similarity = self._escape_step(
+                    pipeline,
+                    walk,
+                    settings,
+                    ip_kwargs,
+                    effective_ip_weight,
+                    stagnation,
+                )
+            else:
+                custom_latents = self._prepare_custom_latents(
+                    walk,
+                    settings,
+                    total_steps,
+                )
+                with torch.no_grad():
+                    result = pipeline(
+                        prompt="",
+                        image=walk.image,
+                        strength=settings.noise_strength,
+                        num_inference_steps=total_steps,
+                        guidance_scale=0.0,
+                        generator=walk.generator,
+                        latents=custom_latents,
+                        callback_on_step_end=callback,
+                        callback_on_step_end_tensor_inputs=["latents"],
+                        output_type="pil",
+                        **ip_kwargs,
+                    ).images[0]
+                escape_similarity = None
 
             previous_image = walk.image
             change = walk.advance(result)
@@ -325,6 +346,12 @@ class ModelService:
                 effective_parameters={
                     "frequency": settings.experiments.frequency.enabled,
                     "clip": settings.experiments.clip.enabled,
+                    "escape": settings.experiments.escape.enabled,
+                    "escapeActive": escape_active,
+                    "semanticRadius": stagnation.radius,
+                    "semanticProgress": stagnation.progress_ratio,
+                    "semanticRevisit": stagnation.revisit_similarity,
+                    "escapeSelectionSimilarity": escape_similarity,
                     "ipAdapter": settings.experiments.ip_adapter.enabled,
                     "ipAdapterWeight": effective_ip_weight,
                     "clipTargetSimilarity": target_similarity,
@@ -474,22 +501,30 @@ class ModelService:
         self,
         walk: LatentWalk,
         settings: ExperimentSettings,
-    ) -> tuple[ClipGuidance | None, torch.Tensor | None]:
-        track_semantics = (
-            settings.clip.enabled
-            or settings.metrics.enabled
-            or (
-                settings.ip_adapter.enabled
-                and settings.ip_adapter.modulation == "feedback"
-            )
-        )
-        if not track_semantics:
-            return None, None
+    ) -> tuple[
+        ClipGuidance | None,
+        torch.Tensor | None,
+        bool,
+        StagnationResult,
+    ]:
+        if not self._tracks_semantics(settings):
+            return None, None, False, StagnationResult()
 
         encoder = self._load_clip_encoder()
-        if walk.semantic_embedding is None:
+        if (
+            walk.semantic_embedding is None
+            or walk.semantic_step_number != walk.step_number
+        ):
             current = self._embed_image(walk.image)
             walk.semantic_embedding = current
+            walk.semantic_step_number = walk.step_number
+            walk.semantic_direction = None
+            walk.semantic_history.clear()
+            walk.semantic_history.append(current.detach())
+            walk.escape_cooldown = 0
+
+        if settings.clip.enabled and walk.semantic_direction is None:
+            current = walk.semantic_embedding
             direction = torch.randn(
                 current.shape,
                 generator=walk.semantic_generator,
@@ -498,17 +533,119 @@ class ModelService:
             direction -= (direction * current).sum(dim=-1, keepdim=True) * current
             walk.semantic_direction = F.normalize(direction, dim=-1)
 
-        if not settings.clip.enabled:
-            return None, None
-
-        target = F.normalize(
-            walk.semantic_embedding
-            + settings.clip.semantic_step * walk.semantic_direction,
-            dim=-1,
+        clip_target = (
+            F.normalize(
+                walk.semantic_embedding
+                + settings.clip.semantic_step * walk.semantic_direction,
+                dim=-1,
+            )
+            if settings.clip.enabled
+            else None
         )
+        stagnation = (
+            semantic_stagnation(
+                walk.semantic_history,
+                settings.escape.sensitivity,
+            )
+            if settings.escape.enabled
+            else StagnationResult()
+        )
+        escape_active = self._should_escape(walk, settings, stagnation)
+        callback = (
+            ClipGuidance(
+                settings,
+                self._pipeline.vae,
+                encoder,
+                clip_target,
+            )
+            if clip_target is not None
+            else None
+        )
+        return callback, clip_target, escape_active, stagnation
+
+    @staticmethod
+    def _should_escape(
+        walk: LatentWalk,
+        settings: ExperimentSettings,
+        stagnation: StagnationResult,
+    ) -> bool:
+        if not settings.escape.enabled:
+            walk.escape_cooldown = 0
+            return False
+
+        if walk.escape_cooldown > 0:
+            walk.escape_cooldown -= 1
+        if not stagnation.stuck or walk.escape_cooldown > 0:
+            return False
+
+        walk.escape_cooldown = 24
+        return True
+
+    def _escape_step(
+        self,
+        pipeline: AutoPipelineForImage2Image,
+        walk: LatentWalk,
+        settings: WalkSettings,
+        ip_kwargs: dict[str, object],
+        effective_ip_weight: float,
+        stagnation: StagnationResult,
+    ) -> tuple[Image.Image, float]:
+        candidate_strength = min(
+            settings.noise_strength + settings.experiments.escape.strength,
+            1.0,
+        )
+        candidate_steps = max(
+            settings.denoise_steps,
+            math.ceil(settings.denoise_steps / candidate_strength),
+        )
+        seeds = torch.randint(
+            0,
+            2**31,
+            (4,),
+            generator=walk.escape_generator,
+            device="cuda",
+        ).cpu()
+        candidates = []
+        adapter_active = bool(ip_kwargs)
+        if adapter_active:
+            pipeline.set_ip_adapter_scale(0.0)
+        try:
+            with torch.no_grad():
+                for seed in seeds:
+                    generator = torch.Generator(device="cuda").manual_seed(int(seed))
+                    candidate = pipeline(
+                        prompt="",
+                        image=walk.image,
+                        strength=candidate_strength,
+                        num_inference_steps=candidate_steps,
+                        guidance_scale=0.0,
+                        generator=generator,
+                        output_type="pil",
+                        **ip_kwargs,
+                    ).images[0]
+                    candidates.append(candidate)
+        finally:
+            if adapter_active:
+                pipeline.set_ip_adapter_scale(effective_ip_weight)
+
+        centroid = stagnation.centroid
+        similarities = [
+            float((self._embed_image(candidate) * centroid).sum())
+            for candidate in candidates
+        ]
+        selected = min(range(len(candidates)), key=similarities.__getitem__)
+        return candidates[selected], similarities[selected]
+
+    @staticmethod
+    def _tracks_semantics(settings: ExperimentSettings) -> bool:
         return (
-            ClipGuidance(settings, self._pipeline.vae, encoder, target),
-            target,
+            settings.clip.enabled
+            or settings.escape.enabled
+            or settings.metrics.enabled
+            or (
+                settings.ip_adapter.enabled
+                and settings.ip_adapter.modulation == "feedback"
+            )
         )
 
     def _update_clip_state(
@@ -516,23 +653,18 @@ class ModelService:
         walk: LatentWalk,
         settings: ExperimentSettings,
     ) -> float | None:
-        track_semantics = (
-            settings.clip.enabled
-            or settings.metrics.enabled
-            or (
-                settings.ip_adapter.enabled
-                and settings.ip_adapter.modulation == "feedback"
-            )
-        )
-        if not track_semantics:
+        if not self._tracks_semantics(settings):
             return None
 
         previous = walk.semantic_embedding
         current = self._embed_image(walk.image)
         semantic_change = float(1 - (previous * current).sum())
-        observed = current - previous
-        observed -= (observed * current).sum(dim=-1, keepdim=True) * current
-        if observed.norm() > 1e-6:
+        if settings.clip.enabled:
+            observed = current - previous
+            observed -= (observed * current).sum(dim=-1, keepdim=True) * current
+        else:
+            observed = None
+        if observed is not None and observed.norm() > 1e-6:
             observed = F.normalize(observed, dim=-1)
             innovation = torch.randn(
                 current.shape,
@@ -551,6 +683,8 @@ class ModelService:
             direction -= (direction * current).sum(dim=-1, keepdim=True) * current
             walk.semantic_direction = F.normalize(direction, dim=-1)
         walk.semantic_embedding = current
+        walk.semantic_step_number = walk.step_number
+        walk.semantic_history.append(current.detach())
         walk.last_semantic_change = semantic_change
         return semantic_change
 

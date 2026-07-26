@@ -3,7 +3,7 @@ from __future__ import annotations
 import math
 from collections import deque
 from dataclasses import dataclass, field
-from typing import Protocol
+from typing import Protocol, Sequence
 
 import torch
 import torch.nn.functional as F
@@ -25,6 +25,13 @@ class ClipSettings:
     semantic_step: float = 0.08
     momentum: float = 0.85
     guidance: float = 0.005
+
+
+@dataclass(frozen=True)
+class EscapeSettings:
+    enabled: bool = False
+    strength: float = 0.55
+    sensitivity: float = 1.2
 
 
 @dataclass(frozen=True)
@@ -50,6 +57,7 @@ class MetricSettings:
 class ExperimentSettings:
     frequency: FrequencySettings = field(default_factory=FrequencySettings)
     clip: ClipSettings = field(default_factory=ClipSettings)
+    escape: EscapeSettings = field(default_factory=EscapeSettings)
     ip_adapter: IpAdapterSettings = field(default_factory=IpAdapterSettings)
     metrics: MetricSettings = field(default_factory=MetricSettings)
 
@@ -61,6 +69,7 @@ class ExperimentSettings:
 
         frequency = _section(raw, "frequency")
         clip = _section(raw, "clip")
+        escape = _section(raw, "escape")
         ip_adapter = _section(raw, "ipAdapter")
         metrics = _section(raw, "metrics")
         memory = ip_adapter.get("memory", "previous")
@@ -87,6 +96,11 @@ class ExperimentSettings:
                 ),
                 momentum=_number(clip, "momentum", 0.85, 0.0, 0.98),
                 guidance=_number(clip, "guidance", 0.005, 0.0, 0.025),
+            ),
+            escape=EscapeSettings(
+                enabled=_boolean(escape, "enabled", False),
+                strength=_number(escape, "strength", 0.55, 0.35, 0.55),
+                sensitivity=_number(escape, "sensitivity", 1.2, 0.5, 1.5),
             ),
             ip_adapter=IpAdapterSettings(
                 enabled=_boolean(ip_adapter, "enabled", False),
@@ -128,6 +142,11 @@ class ExperimentSettings:
                 "momentum": self.clip.momentum,
                 "guidance": self.clip.guidance,
             },
+            "escape": {
+                "enabled": self.escape.enabled,
+                "strength": self.escape.strength,
+                "sensitivity": self.escape.sensitivity,
+            },
             "ipAdapter": {
                 "enabled": self.ip_adapter.enabled,
                 "weight": self.ip_adapter.weight,
@@ -154,12 +173,18 @@ class WalkState:
     generator: torch.Generator | None = None
     semantic_generator: torch.Generator | None = None
     conditioning_generator: torch.Generator | None = None
+    escape_generator: torch.Generator | None = None
     history: deque[Image.Image] = field(
         default_factory=lambda: deque(maxlen=32)
     )
     frequency_memory: dict[str, torch.Tensor] = field(default_factory=dict)
     semantic_embedding: torch.Tensor | None = None
+    semantic_step_number: int | None = None
     semantic_direction: torch.Tensor | None = None
+    semantic_history: deque[torch.Tensor] = field(
+        default_factory=lambda: deque(maxlen=64)
+    )
+    escape_cooldown: int = 0
     ip_adapter_ema: torch.Tensor | None = None
     last_semantic_change: float | None = None
 
@@ -180,6 +205,56 @@ class StepResult:
     semantic_change: float | None = None
     metrics: dict[str, float] = field(default_factory=dict)
     effective_parameters: dict[str, object] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class StagnationResult:
+    stuck: bool = False
+    radius: float | None = None
+    progress_ratio: float | None = None
+    revisit_similarity: float | None = None
+    centroid: torch.Tensor | None = None
+
+
+def semantic_stagnation(
+    embeddings: Sequence[torch.Tensor],
+    sensitivity: float,
+    window_size: int = 12,
+) -> StagnationResult:
+    if len(embeddings) < window_size * 2:
+        return StagnationResult()
+
+    history = torch.cat(list(embeddings), dim=0).float()
+    window = history[-window_size:]
+    centroid = F.normalize(window.mean(dim=0, keepdim=True), dim=-1)
+    radius = torch.acos(
+        (window * centroid).sum(dim=-1).clamp(-1 + 1e-6, 1 - 1e-6)
+    ).mean()
+    step_angles = torch.acos(
+        (window[:-1] * window[1:]).sum(dim=-1).clamp(-1 + 1e-6, 1 - 1e-6)
+    )
+    net_angle = torch.acos(
+        (window[0] * window[-1]).sum().clamp(-1 + 1e-6, 1 - 1e-6)
+    )
+    progress_ratio = net_angle / step_angles.sum().clamp_min(1e-6)
+    older = history[:-window_size]
+    revisit_similarity = (older * window[-1]).sum(dim=-1).max()
+
+    radius_value = float(radius)
+    progress_value = float(progress_ratio)
+    revisit_value = float(revisit_similarity)
+    stuck = (
+        radius_value < 0.22 * sensitivity
+        and progress_value < 0.13 * sensitivity
+        and revisit_value > 1 - 0.06 * sensitivity
+    )
+    return StagnationResult(
+        stuck=stuck,
+        radius=radius_value,
+        progress_ratio=progress_value,
+        revisit_similarity=revisit_value,
+        centroid=centroid,
+    )
 
 
 class NoiseStrategy(Protocol):
