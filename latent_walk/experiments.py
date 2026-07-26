@@ -30,7 +30,7 @@ class ClipSettings:
 @dataclass(frozen=True)
 class EscapeSettings:
     enabled: bool = False
-    strength: float = 0.55
+    strength: float = 0.02
     sensitivity: float = 1.2
 
 
@@ -99,7 +99,7 @@ class ExperimentSettings:
             ),
             escape=EscapeSettings(
                 enabled=_boolean(escape, "enabled", False),
-                strength=_number(escape, "strength", 0.55, 0.35, 0.55),
+                strength=_number(escape, "strength", 0.02, 0.0, 0.025),
                 sensitivity=_number(escape, "sensitivity", 1.2, 0.5, 1.5),
             ),
             ip_adapter=IpAdapterSettings(
@@ -173,7 +173,6 @@ class WalkState:
     generator: torch.Generator | None = None
     semantic_generator: torch.Generator | None = None
     conditioning_generator: torch.Generator | None = None
-    escape_generator: torch.Generator | None = None
     history: deque[Image.Image] = field(
         default_factory=lambda: deque(maxlen=32)
     )
@@ -184,7 +183,6 @@ class WalkState:
     semantic_history: deque[torch.Tensor] = field(
         default_factory=lambda: deque(maxlen=64)
     )
-    escape_cooldown: int = 0
     ip_adapter_ema: torch.Tensor | None = None
     last_semantic_change: float | None = None
 
@@ -210,6 +208,7 @@ class StepResult:
 @dataclass(frozen=True)
 class StagnationResult:
     stuck: bool = False
+    pressure: float = 0.0
     radius: float | None = None
     progress_ratio: float | None = None
     revisit_similarity: float | None = None
@@ -243,6 +242,25 @@ def semantic_stagnation(
     radius_value = float(radius)
     progress_value = float(progress_ratio)
     revisit_value = float(revisit_similarity)
+    radius_pressure = min(
+        max((0.38 * sensitivity - radius_value) / (0.24 * sensitivity), 0.0),
+        1.0,
+    )
+    progress_pressure = min(
+        max(
+            (0.22 * sensitivity - progress_value) / (0.14 * sensitivity),
+            0.0,
+        ),
+        1.0,
+    )
+    revisit_pressure = min(
+        max(
+            (revisit_value - (1 - 0.18 * sensitivity)) / (0.14 * sensitivity),
+            0.0,
+        ),
+        1.0,
+    )
+    pressure = (radius_pressure * progress_pressure * revisit_pressure) ** (1 / 3)
     stuck = (
         radius_value < 0.22 * sensitivity
         and progress_value < 0.13 * sensitivity
@@ -250,6 +268,7 @@ def semantic_stagnation(
     )
     return StagnationResult(
         stuck=stuck,
+        pressure=pressure,
         radius=radius_value,
         progress_ratio=progress_value,
         revisit_similarity=revisit_value,

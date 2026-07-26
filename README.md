@@ -93,15 +93,13 @@ Each intervention can run alone or alongside the others:
   spatially low-pass filtered and bounded; the final scheduler step is never
   modified because it has no later denoiser pass to project it back onto the
   image manifold.
-- **Semantic escape** watches a rolling CLIP trajectory for the combination
+- **Semantic novelty** watches a rolling CLIP trajectory for the combination
   measured in attractor runs: a small semantic radius, low net progress
-  relative to path length, and high similarity to older frames. When all three
-  trigger, it generates four deep or full-reset candidates and keeps the one
-  least similar to the recent embedding centroid before entering a cooldown.
-  Full reset deliberately discards the stuck composition for that proposal.
-  Escape proposals temporarily supersede the other interventions, and a
-  triggered frame costs four ordinary proposals. The intervention is disabled
-  by default.
+  relative to path length, and high similarity to older frames. Those signals
+  form a continuous pressure score that proportionally repels every subsequent
+  denoising step from the recent embedding centroid. It does not reset,
+  crossfade, or replace frames. The pressure biases motion rather than
+  guaranteeing departure from a deep attractor, and it is disabled by default.
 - **IP-Adapter memory** conditions SDXL-Turbo on the previous frame, a lagged or
   random history frame, or an exponential moving average of image embeddings.
   The adapter and its ViT-H image encoder load only when first enabled.
@@ -137,10 +135,11 @@ browser can download:
 - A ZIP bundle containing that manifest, the processed source image, and every
   retained JPEG frame.
 
-Importing a version-1 manifest restores its seed and replays each recorded
-configuration in order after the same source image is selected. The source
-image itself is not embedded in the JSON manifest; use the ZIP bundle when the
-source and generated frames need to travel together.
+Importing a version-2 manifest restores its seed and replays each recorded
+configuration in order after the same source image is selected. Version-1
+manifests remain compatible unless they used the retired hard-reset escape
+mode. The source image itself is not embedded in the JSON manifest; use the ZIP
+bundle when the source and generated frames need to travel together.
 
 The uploaded image is sent only to the server running on this machine.
 

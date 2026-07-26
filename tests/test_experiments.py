@@ -51,7 +51,7 @@ def test_experiment_settings_parse_and_bound_values() -> None:
     assert settings.frequency.persistence == 0.98
     assert settings.clip.semantic_step == 0.12
     assert settings.escape.enabled
-    assert settings.escape.strength == 0.55
+    assert settings.escape.strength == 0.025
     assert settings.escape.sensitivity == 1.5
     assert settings.ip_adapter.memory == "lagged"
     assert settings.ip_adapter.lag == 8
@@ -62,7 +62,7 @@ def test_experiment_defaults_use_calibrated_safe_values() -> None:
     settings = ExperimentSettings.from_message({})
 
     assert settings.clip.guidance == 0.005
-    assert settings.escape.strength == 0.55
+    assert settings.escape.strength == 0.02
     assert settings.escape.sensitivity == 1.2
     assert settings.ip_adapter.weight == 0.2
 
@@ -196,4 +196,6 @@ def test_semantic_stagnation_distinguishes_circling_from_progress() -> None:
     assert stuck.radius < 0.22
     assert stuck.progress_ratio < 0.13
     assert stuck.revisit_similarity > 0.94
+    assert stuck.pressure > 0.8
     assert not moving.stuck
+    assert moving.pressure == 0

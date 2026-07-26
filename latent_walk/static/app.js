@@ -22,6 +22,7 @@ const elements = {
   semanticHud: $("#semanticHud"),
   semantic: $("#semanticValue"),
   escapeHud: $("#escapeHud"),
+  escapePressure: $("#escapePressureValue"),
   status: $("#statusText"),
   statusDot: $("#statusDot"),
   timeline: $("#timeline"),
@@ -93,6 +94,7 @@ const controls = [
   [elements.clipStep, $("#clipStepOutput"), (value) => Number(value).toFixed(3)],
   [elements.clipMomentum, $("#clipMomentumOutput"), (value) => Number(value).toFixed(2)],
   [elements.clipGuidance, $("#clipGuidanceOutput"), (value) => Number(value).toFixed(3)],
+  [elements.escapeStrength, $("#escapeStrengthOutput"), (value) => Number(value).toFixed(4)],
   [elements.escapeSensitivity, $("#escapeSensitivityOutput"), (value) => Number(value).toFixed(2)],
   [elements.ipWeight, $("#ipWeightOutput"), (value) => Number(value).toFixed(2)],
   [elements.ipLag, $("#ipLagOutput"), (value) => value],
@@ -247,7 +249,6 @@ for (const control of [
   elements.frequencyEnabled,
   elements.clipEnabled,
   elements.escapeEnabled,
-  elements.escapeStrength,
   elements.ipEnabled,
   elements.ipMemory,
   elements.ipModulation,
@@ -330,6 +331,9 @@ async function replaceImage(blob, meta, addToHistory = true) {
     elements.semantic.textContent = Number(meta.semanticChange).toFixed(3);
   }
   elements.escapeHud.hidden = meta.effective?.escapeActive !== true;
+  elements.escapePressure.textContent = Number(
+    meta.effective?.escapePressure ?? 0,
+  ).toFixed(2);
   const metrics = meta.metrics ?? {};
   elements.metricReadout.hidden = Object.keys(metrics).length <= 1;
   elements.lpips.textContent = metrics.lpips == null ? "—" : Number(metrics.lpips).toFixed(3);
@@ -571,8 +575,13 @@ async function importManifest(file) {
     setStatus("Manifest is not valid JSON", "error");
     return;
   }
+  const legacyCompatible = manifest.version === 1
+    && Array.isArray(manifest.steps)
+    && manifest.steps.every(
+      (step) => step?.settings?.experiments?.escape?.enabled !== true,
+    );
   if (
-    manifest.version !== 1
+    (manifest.version !== 2 && !legacyCompatible)
     || !Number.isSafeInteger(manifest.seed)
     || !Array.isArray(manifest.steps)
     || manifest.truncated === true
@@ -583,6 +592,7 @@ async function importManifest(file) {
     setStatus("Unsupported or incomplete replay manifest", "error");
     return;
   }
+  if (legacyCompatible) elements.escapeEnabled.checked = false;
   elements.seed.value = String(manifest.seed);
   replaySteps = manifest.steps;
   replayActive = true;
@@ -633,7 +643,7 @@ elements.preset.addEventListener("change", () => {
 elements.defaults.addEventListener("click", () => {
   const defaults = [
     "0.45", "2", "4", "1", "1", "1", "0.5", "0.08", "0.85",
-    "0.005", "1.2", "0.2", "4", "0.85", "0.08", "8", "0.5", "0.08",
+    "0.005", "0.02", "1.2", "0.2", "4", "0.85", "0.08", "8", "0.5", "0.08",
   ];
   controls.forEach(([input], index) => {
     input.value = defaults[index];
@@ -642,7 +652,6 @@ elements.defaults.addEventListener("click", () => {
   elements.frequencyEnabled.checked = false;
   elements.clipEnabled.checked = false;
   elements.escapeEnabled.checked = false;
-  elements.escapeStrength.value = "0.55";
   elements.ipEnabled.checked = false;
   elements.ipMemory.value = "previous";
   elements.ipModulation.value = "constant";

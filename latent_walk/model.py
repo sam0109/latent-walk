@@ -139,12 +139,16 @@ class ClipGuidance:
         settings: ExperimentSettings,
         vae: torch.nn.Module,
         image_encoder: CLIPVisionModelWithProjection,
-        target: torch.Tensor,
+        attract_target: torch.Tensor | None,
+        repel_target: torch.Tensor | None,
+        repulsion_guidance: float,
     ) -> None:
         self.settings = settings
         self.vae = vae
         self.image_encoder = image_encoder
-        self.target = target
+        self.attract_target = attract_target
+        self.repel_target = repel_target
+        self.repulsion_guidance = repulsion_guidance
 
     def __call__(
         self,
@@ -155,7 +159,10 @@ class ClipGuidance:
     ) -> dict[str, torch.Tensor]:
         del timestep
         latents = callback_kwargs["latents"]
-        guidance = self.settings.clip.guidance
+        attraction_guidance = (
+            self.settings.clip.guidance if self.attract_target is not None else 0.0
+        )
+        guidance = attraction_guidance + self.repulsion_guidance
         if guidance <= 0 or step_index >= int(pipeline.num_timesteps) - 1:
             return callback_kwargs
 
@@ -168,7 +175,15 @@ class ClipGuidance:
                     return_dict=False,
                 )[0]
                 embedding = self._embed_pixels(pixels)
-                loss = 1 - (embedding * self.target).sum(dim=-1).mean()
+                loss = embedding.new_zeros(())
+                if self.attract_target is not None:
+                    loss = loss - (attraction_guidance / guidance) * (
+                        embedding * self.attract_target
+                    ).sum(dim=-1).mean()
+                if self.repel_target is not None:
+                    loss = loss + (self.repulsion_guidance / guidance) * (
+                        embedding * self.repel_target
+                    ).sum(dim=-1).mean()
                 gradient = torch.autograd.grad(loss, active)[0]
         finally:
             self.vae.to(dtype=torch.float16)
@@ -276,9 +291,6 @@ class ModelService:
                 walk.conditioning_generator = torch.Generator(
                     device="cuda"
                 ).manual_seed(walk.seed ^ 0x49504144)
-                walk.escape_generator = torch.Generator(
-                    device="cuda"
-                ).manual_seed(walk.seed ^ 0x45534350)
 
             ip_kwargs, effective_ip_weight = self._prepare_ip_adapter(
                 walk,
@@ -290,36 +302,25 @@ class ModelService:
                     settings.experiments,
                 )
             )
-            if escape_active:
-                result, escape_similarity = self._escape_step(
-                    pipeline,
-                    walk,
-                    settings,
-                    ip_kwargs,
-                    effective_ip_weight,
-                    stagnation,
-                )
-            else:
-                custom_latents = self._prepare_custom_latents(
-                    walk,
-                    settings,
-                    total_steps,
-                )
-                with torch.no_grad():
-                    result = pipeline(
-                        prompt="",
-                        image=walk.image,
-                        strength=settings.noise_strength,
-                        num_inference_steps=total_steps,
-                        guidance_scale=0.0,
-                        generator=walk.generator,
-                        latents=custom_latents,
-                        callback_on_step_end=callback,
-                        callback_on_step_end_tensor_inputs=["latents"],
-                        output_type="pil",
-                        **ip_kwargs,
-                    ).images[0]
-                escape_similarity = None
+            custom_latents = self._prepare_custom_latents(
+                walk,
+                settings,
+                total_steps,
+            )
+            with torch.no_grad():
+                result = pipeline(
+                    prompt="",
+                    image=walk.image,
+                    strength=settings.noise_strength,
+                    num_inference_steps=total_steps,
+                    guidance_scale=0.0,
+                    generator=walk.generator,
+                    latents=custom_latents,
+                    callback_on_step_end=callback,
+                    callback_on_step_end_tensor_inputs=["latents"],
+                    output_type="pil",
+                    **ip_kwargs,
+                ).images[0]
 
             previous_image = walk.image
             change = walk.advance(result)
@@ -348,10 +349,10 @@ class ModelService:
                     "clip": settings.experiments.clip.enabled,
                     "escape": settings.experiments.escape.enabled,
                     "escapeActive": escape_active,
+                    "escapePressure": stagnation.pressure,
                     "semanticRadius": stagnation.radius,
                     "semanticProgress": stagnation.progress_ratio,
                     "semanticRevisit": stagnation.revisit_similarity,
-                    "escapeSelectionSimilarity": escape_similarity,
                     "ipAdapter": settings.experiments.ip_adapter.enabled,
                     "ipAdapterWeight": effective_ip_weight,
                     "clipTargetSimilarity": target_similarity,
@@ -521,7 +522,6 @@ class ModelService:
             walk.semantic_direction = None
             walk.semantic_history.clear()
             walk.semantic_history.append(current.detach())
-            walk.escape_cooldown = 0
 
         if settings.clip.enabled and walk.semantic_direction is None:
             current = walk.semantic_embedding
@@ -550,91 +550,23 @@ class ModelService:
             if settings.escape.enabled
             else StagnationResult()
         )
-        escape_active = self._should_escape(walk, settings, stagnation)
+        repulsion_guidance = settings.escape.strength * stagnation.pressure
+        repel_target = (
+            stagnation.centroid if repulsion_guidance > 0 else None
+        )
         callback = (
             ClipGuidance(
                 settings,
                 self._pipeline.vae,
                 encoder,
                 clip_target,
+                repel_target,
+                repulsion_guidance,
             )
-            if clip_target is not None
+            if clip_target is not None or repel_target is not None
             else None
         )
-        return callback, clip_target, escape_active, stagnation
-
-    @staticmethod
-    def _should_escape(
-        walk: LatentWalk,
-        settings: ExperimentSettings,
-        stagnation: StagnationResult,
-    ) -> bool:
-        if not settings.escape.enabled:
-            walk.escape_cooldown = 0
-            return False
-
-        if walk.escape_cooldown > 0:
-            walk.escape_cooldown -= 1
-        if not stagnation.stuck or walk.escape_cooldown > 0:
-            return False
-
-        walk.escape_cooldown = 24
-        return True
-
-    def _escape_step(
-        self,
-        pipeline: AutoPipelineForImage2Image,
-        walk: LatentWalk,
-        settings: WalkSettings,
-        ip_kwargs: dict[str, object],
-        effective_ip_weight: float,
-        stagnation: StagnationResult,
-    ) -> tuple[Image.Image, float]:
-        candidate_strength = min(
-            settings.noise_strength + settings.experiments.escape.strength,
-            1.0,
-        )
-        candidate_steps = max(
-            settings.denoise_steps,
-            math.ceil(settings.denoise_steps / candidate_strength),
-        )
-        seeds = torch.randint(
-            0,
-            2**31,
-            (4,),
-            generator=walk.escape_generator,
-            device="cuda",
-        ).cpu()
-        candidates = []
-        adapter_active = bool(ip_kwargs)
-        if adapter_active:
-            pipeline.set_ip_adapter_scale(0.0)
-        try:
-            with torch.no_grad():
-                for seed in seeds:
-                    generator = torch.Generator(device="cuda").manual_seed(int(seed))
-                    candidate = pipeline(
-                        prompt="",
-                        image=walk.image,
-                        strength=candidate_strength,
-                        num_inference_steps=candidate_steps,
-                        guidance_scale=0.0,
-                        generator=generator,
-                        output_type="pil",
-                        **ip_kwargs,
-                    ).images[0]
-                    candidates.append(candidate)
-        finally:
-            if adapter_active:
-                pipeline.set_ip_adapter_scale(effective_ip_weight)
-
-        centroid = stagnation.centroid
-        similarities = [
-            float((self._embed_image(candidate) * centroid).sum())
-            for candidate in candidates
-        ]
-        selected = min(range(len(candidates)), key=similarities.__getitem__)
-        return candidates[selected], similarities[selected]
+        return callback, clip_target, repulsion_guidance > 0, stagnation
 
     @staticmethod
     def _tracks_semantics(settings: ExperimentSettings) -> bool:

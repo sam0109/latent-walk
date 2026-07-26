@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from .experiments import StepResult
 from .model import WalkSettings
 
-MANIFEST_VERSION = 1
+MANIFEST_VERSION = 2
 
 
 @dataclass(frozen=True)

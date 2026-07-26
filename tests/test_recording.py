@@ -29,7 +29,7 @@ def test_recorder_exports_replayable_manifest_and_bundle() -> None:
     recorder.record(settings, result, frame, step=1)
     manifest = json.loads(recorder.manifest_bytes())
 
-    assert manifest["version"] == 1
+    assert manifest["version"] == 2
     assert manifest["seed"] == 42
     assert manifest["firstStep"] == 1
     assert manifest["truncated"] is False
